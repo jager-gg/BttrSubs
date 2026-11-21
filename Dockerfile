@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -21,7 +21,7 @@ RUN arch="$(node -p process.arch)" && cd node_modules/onnxruntime-node/bin/napi-
   && find . -mindepth 1 -maxdepth 1 -type d ! -name linux -exec rm -rf {} + \
   && find linux -mindepth 1 -maxdepth 1 -type d ! -name "$arch" -exec rm -rf {} +
 
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 # ffmpeg/ffprobe read the anchor windows of the playing file. The header probe's bounded range requests
 # (-initial_request_size) need FFmpeg 8, which Debian doesn't package, so a static build is copied in;
 # its HTTPS reads check certificates against the system's store.
