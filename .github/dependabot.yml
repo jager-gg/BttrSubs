@@ -1,0 +1,20 @@
+# Weekly pull requests for outdated packages, the image's base and the workflows' actions.
+# Each one runs the tests (test.yml) before it can be merged.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      dev:
+        dependency-type: development
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

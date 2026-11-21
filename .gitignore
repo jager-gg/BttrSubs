@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.env
+.cache/
+# Caches the tests and the benchmark make for themselves (.cache-bench, .cache-voices-test, ...)
+.cache-*
+*.log
+
+# Logo drafts (any name: bttr-subs-icon-*, and older ones)
+assets/*-icon*
+
+# Design notes (kept out of the repo)
+.impeccable/
+PRODUCT.md
+DESIGN.md
+
+# Replay check data (file names of what was played)
+.replay/

@@ -1,0 +1,44 @@
+{
+  "name": "bttr-subs",
+  "version": "1.0.0",
+  "description": "Smooth, buttery subtitles, synced better to your file: a self-hosted Stremio subtitle addon for AIOStreams, with English dub captions and other languages.",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "replay": "tsx scripts/replay.ts",
+    "score": "tsx scripts/score.ts",
+    "bench": "tsx scripts/bench.ts",
+    "negatives": "tsx scripts/score.ts --negatives"
+  },
+  "keywords": [
+    "stremio",
+    "subtitles",
+    "subsource",
+    "dubtitles",
+    "sync",
+    "aiostreams"
+  ],
+  "license": "AGPL-3.0-only",
+  "dependencies": {
+    "adm-zip": "^0.6.0",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "onnxruntime-node": "1.31.1",
+    "xz-decompress": "0.2.3"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "private": true
+}

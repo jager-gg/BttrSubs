@@ -1,0 +1,360 @@
+/* The configure page: the graphite sidebar holds the steps; each step is a quiet sheet Bubs watches. */
+
+/* ---------- the steps in the sidebar ---------- */
+.side-label { color: var(--side-muted); font-size: 12.5px; font-weight: 600; padding: 0 12px; margin: -8px 0 -14px; }
+.cfg-steps .tab { appearance: none; border: 0; background: transparent; cursor: pointer; font: inherit; height: auto; min-height: 54px; padding: 8px 12px; display: grid; grid-template-columns: 30px 1fr; grid-template-rows: auto auto; column-gap: 10px; align-items: center; text-align: left; color: var(--side-muted); font-weight: 550; font-size: 15px; }
+.cfg-steps .step-num { grid-row: 1 / 3; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; border: 1.5px solid rgb(248 248 246 / .25); font: 800 15px/1 var(--display); }
+.cfg-steps .step-num .tick { display: none; width: 15px; height: 15px; }
+.cfg-steps .step-num .tick svg { stroke-width: 2.6; }
+.cfg-steps .intro-num { border-color: transparent; }
+.cfg-steps .intro-num .ic { width: 17px; height: 17px; }
+.cfg-steps .tab-word { line-height: 1.2; }
+.cfg-steps .step-sub { grid-column: 2; font-size: 12px; font-weight: 450; color: var(--side-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
+.cfg-steps .tab[aria-current="step"] { color: var(--title-text); }
+.cfg-steps .tab[aria-current="step"] .step-num { border-color: var(--butter); color: var(--butter); }
+.cfg-steps .tab[data-state="done"] .step-num { background: rgb(248 248 246 / .1); border-color: transparent; color: var(--butter); }
+.cfg-steps .tab[data-state="done"] .step-num .n { display: none; }
+.cfg-steps .tab[data-state="done"] .step-num .tick { display: inline-grid; }
+.cfg-steps .tab[data-state="todo"] .step-num { border-color: #E0756B; color: #E0756B; }
+.cfg-steps .tab-marker { height: 54px; }
+/* Dashboard is a sidebar row (.side-link in app.css). */
+
+/* ---------- frame ---------- */
+.cfg-main { display: grid; gap: 48px; max-width: 1000px; align-content: start; }
+/* Desktops: a step with a step bar fills the window's height, the bar last, so the bar sits at the window's
+   bottom on a short step as on a long one (where it sticks), as on phones. */
+@media (min-width: 861px) {
+  .cfg-main:has(> .step-nav) { display: flex; flex-direction: column; padding-bottom: 0; }
+  .cfg-main > .step-nav { margin-top: auto; }
+}
+.cfg-title { font-size: clamp(44px, 6vw, 84px); line-height: 1.06; }
+.it-sub { font: 800 clamp(26px, 3vw, 38px)/1 var(--display); text-transform: uppercase; letter-spacing: .02em; color: var(--butter); position: relative; z-index: 1; margin-top: -4px; }
+.it-go { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; z-index: 1; margin-top: 6px; color: var(--title-muted); font-size: 13.5px; }
+.btn.big { height: 52px; padding: 0 22px; font-size: 16px; border-radius: 14px; }
+.intertitle .btn.primary { color: #16171A; }
+
+/* the voices and the subtitles sliding into line */
+.demo { display: grid; grid-template-columns: minmax(0, 1fr) 280px; column-gap: 36px; align-items: center; padding: 26px 0; border-top: 1.5px solid var(--text); border-bottom: 1px solid var(--rule); }
+.demo-lane { grid-column: 1; display: grid; grid-template-columns: 82px 1fr; align-items: center; height: 46px; }
+.demo-lane > span { font-size: 13px; font-weight: 650; color: var(--smoke); }
+.demo-row { position: relative; height: 20px; }
+.demo-row::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1.5px; margin-top: -.75px; background: var(--rule-strong); }
+.demo-row i { position: absolute; top: 0; bottom: 0; border-radius: 6px; }
+.demo-row .voice { background: var(--bar); }
+.demo-row .sub { background: var(--butter); box-shadow: inset 0 0 0 1.5px #16171A; animation: slide 1.6s .6s var(--ease) both; }
+@keyframes slide { from { transform: translateX(calc(var(--off) * 10)); filter: blur(1px); } }
+.demo-note { grid-column: 1; display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 14px; padding-left: 82px; animation: vt-in .5s 2s var(--ease) both; }
+.player { grid-column: 2; grid-row: 1 / 4; background: var(--title); color: var(--title-text); border-radius: 18px; padding: 14px; display: grid; gap: 4px; font-size: 14px; }
+.player p { font-weight: 700; padding: 0 8px 6px; }
+.player span { display: grid; grid-template-columns: 18px 1fr auto; gap: 10px; align-items: center; padding: 8px; border-radius: 10px; }
+.player span.on { background: rgb(248 248 246 / .1); }
+.player i { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid currentColor; }
+.player .on i { background: var(--butter); border-color: var(--butter); box-shadow: inset 0 0 0 3px var(--title); }
+.player b { font-weight: 600; display: grid; }
+.player small { font-weight: 450; font-size: 12px; color: var(--title-muted); }
+.player .ic { width: 16px; height: 16px; color: var(--butter); }
+.features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; }
+.features div { display: grid; gap: 8px; align-content: start; }
+.features h2 { font: 800 26px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.features p, .perks li { color: var(--smoke); font-size: 14px; }
+.perks { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 44px; }
+.perks li { padding: 13px 0; border-top: 1px solid var(--rule); }
+.perks b { display: block; color: var(--text); font-weight: 650; font-size: 14.5px; }
+.step-editing { color: var(--smoke); font-size: 13px; font-weight: 650; letter-spacing: .02em; overflow-wrap: anywhere; }
+/* Styles: each a row (where, look, how far up, remove); the one being added, with a preview of its look on a dark frame. */
+.style-list { list-style: none; margin: 0; padding: 0; }
+.style-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 13rem) 186px auto auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.style-where { display: grid; gap: 2px; min-width: 0; }
+.style-where b { font-weight: 650; overflow-wrap: anywhere; }
+.style-where .mono { color: var(--smoke); font-size: 13px; }
+.style-up .field { padding-right: 52px; }
+.style-pick { display: flex; flex-wrap: wrap; gap: 10px; }
+.style-pick > * { flex: 1 1 11rem; min-width: 0; }
+.style-pick > .stepper { flex-basis: 13rem; }
+/* A height: the field holds the number and "% up"; Lower and Higher sit at its right end, inside its border. */
+.stepper { position: relative; display: flex; align-items: stretch; min-width: 0; height: 42px; border: 1.5px solid var(--rule-strong); border-radius: 3px; background: var(--bone); transition: border-color .2s, box-shadow .25s; scroll-margin-top: calc(env(safe-area-inset-top, 0px) + 16px); }
+.stepper:hover { border-color: var(--ash); }
+.stepper:focus-within { border-color: var(--text); box-shadow: 0 0 0 4px rgb(230 180 58 / .35); }
+.stepper.bad { border-color: var(--oxblood); box-shadow: 0 0 0 4px var(--oxblood-soft); }
+.stepper .field, .stepper .field:hover, .stepper .field:focus, .stepper .field[aria-invalid] { flex: 1 1 auto; width: auto; min-width: 2.5ch; height: 100%; border: 0; background: transparent; box-shadow: none; padding: 0 4px 0 14px; font-variant-numeric: tabular-nums; }
+.stepper-unit { align-self: center; padding-right: 10px; color: var(--smoke); font-size: 13.5px; white-space: nowrap; pointer-events: none; }
+.step-btn { appearance: none; flex: none; width: 42px; display: grid; place-items: center; border: 0; border-left: 1px solid var(--rule-strong); background: transparent; color: var(--text); cursor: pointer; touch-action: manipulation; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; transition: background-color .15s; }
+.step-btn:hover { background: var(--wash); }
+.step-btn:active { background: var(--sunk); }
+.step-btn:focus-visible { outline: 2px solid var(--text); outline-offset: -4px; }
+.step-btn[aria-disabled="true"] { color: var(--ash); cursor: default; }
+.step-btn[aria-disabled="true"]:hover, .step-btn[aria-disabled="true"]:active { background: transparent; }
+.step-btn .ic { width: 16px; height: 16px; }
+/* A count the server allows only one of: said, with who set it. */
+.per-fixed { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0; }
+.per-fixed b { font-size: 18px; }
+.per-fixed span { color: var(--smoke); font-size: 13.5px; }
+/* The changes to a look: a closed panel under it, its controls in a grid that stacks on phones. */
+.style-changes { border: 1px solid var(--rule); border-radius: 3px; }
+.style-changes summary { cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 44px; font-weight: 650; list-style: none; }
+.style-changes summary::-webkit-details-marker { display: none; }
+.style-changes summary .ic { width: 17px; height: 17px; }
+.changes-count { margin-left: auto; color: var(--smoke); font-weight: 500; font-size: 13px; }
+.change-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 14px 20px; padding: 6px 12px 14px; align-items: start; }
+.change { display: grid; gap: 6px; font-size: 13.5px; color: var(--smoke); min-width: 0; }
+.change output { color: var(--text); font-variant-numeric: tabular-nums; }
+.change input[type="range"] { width: 100%; margin: 0; min-height: 28px; accent-color: var(--switch-on); }
+.colour { inline-size: 100%; block-size: 40px; padding: 3px; border: 1px solid var(--rule); border-radius: 3px; background: var(--sunk); cursor: pointer; }
+.style-changes .switch-row { min-height: 40px; }
+.style-changes [data-changes-clear] { margin: 0 12px 14px; }
+.look-preview { position: relative; aspect-ratio: 16 / 9; max-width: 560px; container-type: size; overflow: hidden; border-radius: 3px; background: linear-gradient(160deg, #3a3f46, #1c1f24 60%, #121417); }
+.look-preview span { position: absolute; left: 50%; translate: -50% 0; white-space: nowrap; line-height: 1.15; }
+/* Phones: a saved addon's name takes its own line, and so does a style's place, its look, height and Remove sharing the next. */
+@media (max-width: 860px) {
+  .raised li { flex-wrap: wrap; row-gap: 8px; }
+  .raised li b { flex: 1 1 100%; }
+  /* On a phone a saved style is its place, then its look with Change and Remove, then its height across the row. */
+  .style-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .style-row .stepper { grid-column: 1 / -1; grid-row: 3; }
+  /* 44 px inside its border, for the buttons. */
+  .stepper { height: 47px; }
+  .step-btn { width: 48px; }
+  .change-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .change-grid > :not(.change-colour) { grid-column: 1 / -1; }
+  .change input[type="range"], .style-changes .switch-row { min-height: 44px; }
+  .style-row .style-where { grid-column: 1 / -1; }
+}
+
+/* ---------- a step ---------- */
+.step-head { display: grid; grid-template-columns: minmax(0, 1fr) 132px; gap: 24px; align-items: end; padding-bottom: 18px; border-bottom: 1.5px solid var(--text); }
+.step-title { display: grid; gap: 10px; }
+.step-of { font-size: 13px; font-weight: 700; color: var(--smoke); }
+.step-title h1 { font: 900 clamp(40px, 4.6vw, 60px)/.9 var(--display); text-transform: uppercase; letter-spacing: .01em; max-width: 16ch; text-wrap: balance; }
+.step-title p { color: var(--smoke); font-size: 16px; max-width: 74ch; text-wrap: pretty; }
+/* Line breaks: each sentence of a step's intro starts a line, a phrase (.ph) moves to the next line whole, a
+   menu name (.nm) never splits, and a paragraph doesn't end on a lone word. */
+.sent { display: block; }
+.ph { display: inline-block; }
+.nm { white-space: nowrap; }
+.cfg-group-note, .set-label p, .acct-hint, .app-more { text-wrap: pretty; }
+.noir-live svg { display: block; width: 100%; height: auto; overflow: visible; position: relative; }
+.peek { margin-bottom: -20px; }
+/* In dark the peek has no disc: Bubs' rim and floor come from app.css. */
+.cfg-rows { display: grid; }
+.cfg-group { font: 800 26px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; padding-top: 34px; }
+/* A step's first section starts right under its heading. */
+.cfg-rows > .cfg-group:first-child { padding-top: 0; }
+.cfg-group-note { color: var(--smoke); font-size: 13.5px; padding: 6px 0 12px; border-bottom: 1px solid var(--rule-strong); }
+.set-label:has(> .src-ic) { grid-template-columns: 36px minmax(0, 1fr); column-gap: 0; }
+.set-label > .src-ic { grid-row: 1 / 3; margin-top: 1px; }
+.src-ic { width: 24px; height: 24px; border-radius: 7px; background: #fff; box-shadow: 0 0 0 1px var(--rule-strong); }
+.src-ic.on-black { background: #000; }
+
+/* ---------- the Sync step: the account as one band, the apps as a list ---------- */
+.acct { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr) minmax(0, .85fr); gap: 14px 16px; padding-top: 22px; }
+.acct-f { display: grid; gap: 7px; align-content: start; }
+.acct-f .lbl { font-weight: 650; font-size: 14px; }
+.acct-hint { color: var(--smoke); font-size: 12.5px; }
+.acct-hint:empty { display: none; }
+.acct-hint b, .app-more b { color: var(--text); font-weight: 650; }
+.sep { color: var(--ash); }
+.acct-state { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-height: 36px; padding-top: 12px; }
+/* A finding: its words with a mark. A gold tick when fine, a ring when worth a look, oxblood when wrong. */
+.st { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; }
+.app-side .st { white-space: nowrap; }
+.st-ic { flex: none; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; }
+.st-ic .ic, .st-ic svg { width: 12px; height: 12px; stroke-width: 3; }
+.st-ok .st-ic { background: var(--butter); color: #16171A; }
+.st-idle .st-ic { box-shadow: inset 0 0 0 2px var(--ash); }
+.st-bad { color: var(--oxblood); }
+.st-bad .st-ic { background: var(--oxblood); color: #fff; }
+.st-wait { color: var(--smoke); font-weight: 500; font-size: 13.5px; }
+.st-note { color: var(--smoke); font-size: 13px; }
+.apps { list-style: none; margin: 0; padding: 0; }
+.app { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; row-gap: 8px; padding: 15px 0; border-bottom: 1px solid var(--rule); }
+.app-ic { display: flex; }
+.app-name { font-weight: 650; font-size: 15px; }
+.app-name small { display: block; margin-top: 1px; color: var(--smoke); font-size: 13px; font-weight: 500; }
+.app-side { display: flex; align-items: center; justify-content: flex-end; gap: 14px; justify-self: end; }
+.app-side .btn .ic { width: 15px; height: 15px; }
+.app-more { grid-column: 2 / -1; display: grid; gap: 10px; color: var(--smoke); font-size: 13.5px; line-height: 1.6; }
+.app-more .field { width: 100%; }
+@media (max-width: 860px) {
+  .acct { grid-template-columns: minmax(0, 1fr); }
+  .app { column-gap: 12px; }
+  .app-side { flex-direction: column; align-items: flex-end; gap: 8px; }
+  .app-side .btn, .acct-state .btn { min-height: 44px; }
+  .app-more { grid-column: 1 / -1; }
+}
+.cfg-switch .set-control { justify-items: end; align-self: center; }
+@media (min-width: 861px) { .cfg-rows .set:has(.seg) .set-control { align-self: center; } .cfg-rows .set:has(.seg) .set-control .seg { justify-self: end; } }
+.field[aria-invalid] { border-color: var(--oxblood); box-shadow: 0 0 0 4px var(--oxblood-soft); }
+.field-error { display: flex; gap: 8px; align-items: flex-start; color: var(--oxblood); font-size: 13.5px; font-weight: 600; animation: vt-in .35s var(--ease) both; }
+.field-error .ic { width: 16px; height: 16px; margin-top: 2px; }
+.cfg-aside { padding-top: 14px; }
+.text-link { appearance: none; border: 0; background: none; padding: 0; font: inherit; font-weight: 650; color: inherit; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; text-decoration: underline; text-decoration-color: var(--butter); text-decoration-thickness: 2px; text-underline-offset: 4px; min-height: 36px; }
+.text-link .ic { width: 17px; height: 17px; }
+.cfg-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 22px 0 16px; }
+.chip-toggle { appearance: none; border: 1.5px solid var(--rule-strong); background: var(--bone); color: var(--text); height: 40px; padding: 0 15px; border-radius: 10px; font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: background-color .2s, border-color .2s, transform .3s var(--spring); }
+.chip-toggle:hover { border-color: var(--text); }
+.chip-toggle:active { transform: scale(.95); }
+.chip-toggle.on { background: var(--text); color: var(--paper); border-color: var(--text); }
+.chip-toggle.on .ic { color: var(--butter); }
+.chip-toggle .ic { width: 15px; height: 15px; }
+.cfg-info { padding: 4px 0 16px; }
+.cfg-info summary { cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-weight: 650; list-style: none; min-height: 40px; }
+.cfg-info summary::-webkit-details-marker { display: none; }
+.cfg-info summary .ic { width: 17px; height: 17px; }
+.cfg-info p { color: var(--smoke); max-width: 64ch; font-size: 14px; padding: 4px 0 0 25px; }
+/* Filters' less common choices, folded under one line. */
+.cfg-more { border-bottom: 1px solid var(--rule); }
+.cfg-more > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; min-height: 56px; font-weight: 650; font-size: 15px; }
+.cfg-more > summary::-webkit-details-marker { display: none; }
+.cfg-more > summary .ic { width: 17px; height: 17px; transition: transform .3s var(--ease); }
+.cfg-more[open] > summary .ic { transform: rotate(90deg); }
+.cfg-more[open] > summary { border-bottom: 1px solid var(--rule); }
+.cfg-more > .set:last-child { border-bottom: 0; }
+.raised { list-style: none; margin: 0; padding: 0; }
+.raised li { display: flex; align-items: center; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.raised li span:nth-child(2) { color: var(--smoke); margin-right: auto; }
+.set-control .btn.small { justify-self: start; }
+.review { display: grid; border-top: 1.5px solid var(--text); margin-top: 10px; }
+.review-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) auto; gap: 16px; align-items: center; padding: 13px 0; border-bottom: 1px solid var(--rule); }
+.review-label { font-weight: 650; }
+.review-value { color: var(--smoke); }
+.review-value.missing { color: var(--oxblood); font-weight: 650; }
+.create { display: grid; gap: 14px; justify-items: start; padding-top: 28px; }
+.blocked { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--oxblood); font-weight: 600; font-size: 14px; }
+.blocked .ic { width: 17px; height: 17px; }
+.blocked .text-link { color: var(--text); }
+#create[aria-disabled="true"] { background: transparent; color: var(--smoke); border: 1.5px dashed var(--ash); box-shadow: none; cursor: not-allowed; }
+#create[aria-disabled="true"]::before { content: ""; width: 14px; height: 16px; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 16'%3E%3Cpath d='M3 7V5a4 4 0 0 1 8 0v2h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm2 0h4V5a2 2 0 0 0-4 0z'/%3E%3C/svg%3E") center/contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 16'%3E%3Cpath d='M3 7V5a4 4 0 0 1 8 0v2h1a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1zm2 0h4V5a2 2 0 0 0-4 0z'/%3E%3C/svg%3E") center/contain no-repeat; }
+.btn .spin { display: none; width: 16px; height: 16px; border-radius: 50%; border: 2.5px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
+.btn.busy .spin { display: inline-block; }
+@keyframes spin { to { transform: rotate(360deg); } }
+/* The step bar stays at the bottom of the window while a step scrolls, in line with the step (fixed and full width on phones). */
+.step-nav { position: sticky; bottom: 0; z-index: 5; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; padding: 14px 0; background: var(--paper); border-top: 1.5px solid var(--text); }
+.step-nav [data-next] { justify-self: end; }
+.step-nav [data-back] { justify-self: start; }
+.step-count { color: var(--smoke); font-size: 13.5px; }
+
+/* ---------- result ---------- */
+.result { display: grid; gap: 22px; margin-top: -20px; }
+/* Adding to AIOStreams from here: the button, with how it went beside it (under it on a phone). */
+.add-aio { display: flex; gap: 6px 16px; align-items: center; flex-wrap: wrap; }
+/* Wide enough for its longest words with the spinner, so a press doesn't resize it. */
+.add-aio .btn { flex: none; min-width: 192px; justify-content: center; }
+.add-aio .btn.busy { cursor: progress; }
+.add-aio p { flex: 1 1 260px; margin: 0; color: var(--smoke); font-size: 14.5px; }
+/* Two lines kept where it sits under the button, so what it says next moves nothing below it. */
+.add-aio p b, .timeout-note b { color: var(--text); font-weight: 600; }
+.timeout-note { margin: 0; color: var(--smoke); font-size: 14.5px; }
+@media (max-width: 720px) { .add-aio p { flex-basis: 100%; min-height: 45px; min-height: 2lh; } }
+.add-aio p.bad { color: var(--oxblood); }
+.url-box { display: flex; gap: 10px; align-items: center; padding: 8px 8px 8px 18px; border-radius: 16px; border: 1.5px solid var(--text); background: var(--bone); flex-wrap: wrap; }
+.url-box output { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; font-size: 14px; }
+/* Both of the button's labels share one cell, so it is as wide copied as not and the box never reflows. */
+#copy { display: inline-grid; }
+#copy .idle, #copy .done { grid-area: 1 / 1; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+#copy .done, #copy.copied .idle { visibility: hidden; }
+#copy.copied .done { visibility: visible; }
+.after { margin: 0; padding: 0; list-style: none; counter-reset: a; display: grid; }
+.after li { counter-increment: a; display: grid; grid-template-columns: 44px 1fr; align-items: center; padding: 13px 0; border-bottom: 1px solid var(--rule); }
+.after li::before { content: counter(a); font: 900 30px/1 var(--display); color: var(--butter); -webkit-text-stroke: 1px #16171A; }
+.result .text-link { justify-self: start; }
+
+/* ---------- dialog ---------- */
+.cfg-dialog { border: 0; border-radius: 22px; background: var(--bone); color: var(--text); padding: 22px 24px 24px; width: min(480px, calc(100vw - 32px)); box-shadow: var(--float); }
+.cfg-dialog::backdrop { background: rgb(22 23 26 / .5); backdrop-filter: blur(2px); }
+.cfg-dialog[open] { animation: vt-in .4s var(--ease); }
+.dialog-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.dialog-head h2 { font: 800 26px/1 var(--display); text-transform: uppercase; letter-spacing: .02em; }
+.cfg-dialog p { color: var(--smoke); margin: 6px 0 12px; font-size: 14px; }
+.inst { list-style: none; margin: 0; padding: 0; }
+.inst li { padding: 10px 0; border-top: 1px solid var(--rule); overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: reduce) { html:not(.moving) *, html:not(.moving) *::before, html:not(.moving) *::after { animation-delay: 0s !important; } }
+html.calm *, html.calm *::before, html.calm *::after { animation-delay: 0s !important; }
+
+/* ---------- smaller screens ---------- */
+@media (max-width: 860px) {
+  .cfg-page { padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 84px); }
+  .cfg-page .side-in { flex-wrap: wrap; row-gap: 10px; }
+  .side-label { display: none; }
+  .dash-link span:last-child { display: none; }
+  /* Every step keeps its name on phones: number over word, six equal columns, nothing scrolled away. */
+  .cfg-page .tabs.cfg-steps { position: relative; order: 3; flex: 1 1 100%; left: auto; right: auto; bottom: auto; justify-content: space-between; padding: 4px; border-radius: 12px; background: rgb(248 248 246 / .06); box-shadow: none; }
+  .cfg-page .cfg-steps .tab { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 56px; height: 56px; padding: 0 2px; gap: 3px; font-size: 11px; letter-spacing: -0.01em; }
+  .cfg-page .cfg-steps .tab-word { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cfg-page .cfg-steps .step-num { width: 24px; height: 24px; font-size: 13px; }
+  .cfg-page .cfg-steps .step-sub { display: none; }
+  .cfg-page .cfg-steps .tab-marker { top: 4px; height: 56px; }
+  .cfg-page .cfg-steps .tab-marker::before { display: none; }
+  .it-go .btn { flex: 1 1 100%; }
+  .text-link { min-height: 44px; }
+  .chip-toggle { height: 44px; }
+  .cfg-info summary { min-height: 44px; }
+  /* The intro and the finished card stack: Bubs stands on the card, so the headline has the full width. */
+  .cfg-main > .stage { grid-template-columns: 1fr; }
+  .cfg-main > .stage #bubs-host { width: 150px; margin: 0 0 -8px 10px; }
+  .cfg-main > .stage .intertitle { padding: 30px 22px 26px; }
+  .cfg-title { font-size: 46px; }
+  .demo { grid-template-columns: 1fr; }
+  .player { grid-column: 1; grid-row: auto; margin-top: 18px; }
+  .demo-lane { grid-template-columns: 70px 1fr; }
+  .demo-note { padding-left: 70px; }
+  .features, .perks { grid-template-columns: 1fr; }
+  .step-head { grid-template-columns: minmax(0, 1fr) 84px; gap: 12px; }
+  .step-title h1 { font-size: 34px; }
+  .peek { margin-bottom: -12px; }
+  .cfg-switch { grid-template-columns: minmax(0, 1fr) auto; }
+  /* The label is the switch's tap target: 44 px tall without moving the row. */
+  .cfg-switch .set-label > label { display: block; padding: 12px 0; margin: -12px 0; }
+  .review-row { grid-template-columns: 1fr auto; }
+  .review-value { grid-column: 1; grid-row: 2; }
+  .review-row .text-link { grid-row: 1 / 3; grid-column: 2; }
+  .step-nav { position: fixed; z-index: 45; left: 0; right: 0; bottom: 0; grid-template-columns: auto 1fr; padding: 10px 16px calc(env(safe-area-inset-bottom, 0px) + 10px); background: var(--paper); border-top: 1px solid var(--rule-strong); box-shadow: 0 -10px 24px -20px rgb(22 23 26 / .5); }
+  .step-nav .step-count { display: none; }
+  .step-nav [data-next] { justify-self: stretch; }
+  .create .btn { width: 100%; }
+}
+
+.side a.text-btn { text-decoration: none; }
+
+.hero-text { text-wrap: pretty; }
+
+@media (max-width: 860px) { .cfg-main { gap: 32px; } }
+
+/* Bubs on the intro is a button (see usher.js). */
+.bubs-poke { appearance: none; border: 0; background: none; padding: 0; margin: 0; display: block; width: 100%; cursor: pointer; border-radius: 40px; color: inherit; }
+.bubs-poke svg { display: block; width: 100%; height: auto; overflow: visible; transform-origin: 50% 100%; }
+.bubs-poke.flinch svg { animation: flinch .36s var(--ease); }
+@keyframes flinch { 30% { transform: scale(1.05, .93) rotate(-2.5deg); } }
+.bubs-poke.shake svg { animation: rage .1s steps(2) infinite; }
+@keyframes rage { 50% { transform: translate(1.8px, -.8px) rotate(.8deg); } }
+.annoy-canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 85; }
+
+/* Silver screen: step titles take the same double rule as the dashboard's headings. */
+.step-head { border-bottom: 3px double var(--text); }
+
+/* Language chips: + when off (quiet), a check when on. In dark mode a chosen chip is butter with an ink check,
+   so it reads as chosen at a glance (a gold check on a light chip barely shows). */
+.chip-toggle .ic { color: var(--smoke); }
+.chip-toggle.on .ic { color: var(--butter); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .chip-toggle.on { background: var(--butter); border-color: var(--butter); color: var(--graphite); }
+  :root:not([data-theme="light"]) .chip-toggle.on .ic { color: var(--graphite); }
+}
+:root[data-theme="dark"] .chip-toggle.on { background: var(--butter); border-color: var(--butter); color: var(--graphite); }
+:root[data-theme="dark"] .chip-toggle.on .ic { color: var(--graphite); }
+
+/* Status in the track name: what some players do with such names, said beside the switch. */
+/* A saved addon or raised show marked for removal: struck through until saved, with Keep beside it. */
+.raised li b { font-weight: 650; }
+.raised li.removing b, .raised li.removing .mono, .raised li.removing span:not(.ic) { text-decoration: line-through; color: var(--smoke); }
+.raised .text-link { margin-left: auto; }
+
+/* A field's label with its marks beside it: Recommended, a warning that opens what it warns of, Saved. */
+.lbl-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.lbl-row .tag { height: 22px; padding: 0 7px; border-radius: 6px; font-size: 12px; gap: 5px; }
+.lbl-row .tag .ic { width: 12px; height: 12px; }
+.tag.rec { color: var(--text); }
+.tag.rec .ic { color: var(--butter); fill: var(--butter); }
+.tag.warn { appearance: none; background: transparent; border-color: var(--oxblood); color: var(--oxblood); font-family: var(--sans); cursor: pointer; }
+.tag.warn:hover, .tag.warn[aria-expanded="true"] { background: var(--oxblood-soft); }
+@media (max-width: 700px) { .lbl-row .tag.warn { height: 30px; padding: 0 10px; } }

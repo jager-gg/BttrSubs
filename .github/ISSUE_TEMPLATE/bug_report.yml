@@ -1,0 +1,43 @@
+name: Bug report
+description: Something doesn't work as it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. **Never paste an install URL, API key or password**: they open your configuration. Replace them with `…`.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The image tag you run (for example `1.0.0`), or the commit if you build from source. `<your address>/manifest.json` shows it as `version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run it
+      options:
+        - The published image (ghcr.io/jager-gg/bttrsubs)
+        - Built from source
+        - Without Docker
+    validations:
+      required: true
+  - type: input
+    id: player
+    attributes:
+      label: Player
+      description: For example Stremio on Android TV, or Jellyfin through AIOMetadata.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: The lines from `docker compose logs` around the problem. Install URLs and keys are already left out of them, but check before you post.
+      render: text

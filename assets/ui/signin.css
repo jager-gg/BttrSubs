@@ -1,0 +1,52 @@
+/* Sign-in: Bubs standing beside one title card that holds the password field. */
+.signin-top { display: flex; align-items: center; justify-content: space-between; padding: calc(env(safe-area-inset-top, 0px) + 18px) clamp(16px, 4vw, 40px) 0; }
+.signin-top .brand-word { color: var(--text); }
+/* The way to the other page, beside the theme; icon alone on narrow phones, its name still read out. */
+.signin-actions { display: flex; align-items: center; gap: 4px; }
+.signin-link { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px; border-radius: 3px; color: var(--text); font-weight: 600; font-size: 14px; text-decoration: none; }
+.signin-link:hover { background: var(--wash); }
+.signin-link .ic { width: 18px; height: 18px; }
+@media (max-width: 420px) {
+  .signin-link { min-width: 44px; justify-content: center; padding: 0; }
+  .signin-link .link-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+/* As tall as what the browser shows under the header (dvh follows its bars), and no taller: the dock's room the other
+   pages keep under their content isn't kept here. Taller content (a short landscape screen) still scrolls; the light
+   rays behind the card are clipped to the page. */
+body { padding-bottom: 0; }
+.signin { min-height: calc(100vh - 80px); min-height: calc(100dvh - 62px - env(safe-area-inset-top, 0px)); display: grid; place-items: center; padding: 24px 16px calc(env(safe-area-inset-bottom, 0px) + 24px); overflow: clip; }
+/* The status bar's strip shows the page under it; in an app added to the home screen its text is white, so the strip stays graphite there. */
+html::before { background: var(--paper); }
+@media (display-mode: standalone) { html::before { background: var(--side); } }
+.door { width: min(860px, 100%); display: grid; grid-template-columns: 290px minmax(0, 1fr); align-items: end; }
+.door .noir-live { position: relative; z-index: 2; margin-right: -86px; }
+.door .noir-live svg { display: block; width: 100%; height: auto; overflow: visible; }
+.door .intertitle { padding: 44px 44px 40px 116px; min-height: 0; gap: 14px; margin-bottom: 26px; }
+.door .caption { font-size: clamp(34px, 4.4vw, 56px); }
+.door .lede { color: var(--title-muted); position: relative; z-index: 1; }
+form { display: grid; gap: 10px; position: relative; z-index: 1; margin-top: 6px; }
+form label { font-weight: 650; font-size: 14.5px; color: var(--title-text); }
+.pw { position: relative; }
+.pw .field { height: 52px; font-size: var(--input-size, 16px); padding-right: 52px; background: rgb(248 248 246 / .07); border-color: rgb(248 248 246 / .22); color: var(--title-text); }
+.pw .field:hover { border-color: rgb(248 248 246 / .4); }
+.pw .field:focus { border-color: var(--butter); box-shadow: 0 0 0 4px rgb(230 180 58 / .25); }
+.pw .field[aria-invalid="true"] { border-color: #E0756B; box-shadow: 0 0 0 4px rgb(224 117 107 / .2); }
+.pw .icon-btn { position: absolute; right: 6px; top: 6px; color: var(--title-text); }
+.pw .icon-btn:hover { background: rgb(248 248 246 / .08); }
+.signin-err { display: flex; gap: 8px; color: #E0756B; font-weight: 600; font-size: 14px; }
+.signin-err svg { width: 17px; height: 17px; flex: none; margin-top: 2px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.go { height: 54px; font-size: 16px; width: 100%; margin-top: 6px; color: #16171A; }
+.note { color: var(--title-muted); font-size: 13.5px; position: relative; z-index: 1; }
+.shake { animation: shake .45s var(--ease); }
+@keyframes shake { 20% { transform: translateX(-10px); } 40% { transform: translateX(8px); } 60% { transform: translateX(-5px); } 80% { transform: translateX(3px); } }
+@media (max-width: 760px) {
+  .signin { place-items: start center; padding-top: 12px; }
+  .door { grid-template-columns: 1fr; }
+  .door .noir-live { width: 150px; margin: 0 0 -8px 10px; }
+  .door .intertitle { padding: 30px 22px 24px; border-radius: 22px; }
+  .door .intertitle::before { inset: 7px; border-radius: 0; }
+  .door .intertitle::after { inset: 0; border-radius: 0; }
+  .door .caption { font-size: 34px; }
+}
+/* The sunburst behind Bubs is a fixed 400 px square: on a narrow phone its edge is clipped, never scrolled to. */
+.signin { overflow-x: clip; }

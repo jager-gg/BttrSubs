@@ -1,0 +1,258 @@
+import { describe, expect, it } from "vitest";
+import { agreeAnchors, holdsTogether, shiftChanges, dialogueCues, imageCues, measureWindow, parseCues, planShifts, retime, servesListedFile, type Cue } from "../src/sync.js";
+
+const ASS = `[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:09:56.78,0:10:02.74,Signs,,0,0,0,,{\\pos(320,40)}A sign on a wall
+Dialogue: 0,0:09:58.70,0:10:04.04,Default,,0,0,0,,{\\an8}The first line here.
+Dialogue: 0,0:10:05.00,0:10:07.50,Default,,0,0,0,,The second line here.
+Dialogue: 1,0:10:05.00,0:10:07.50,Default,,0,0,0,,The second line here.
+Dialogue: 0,0:10:08.00,0:10:09.00,OP,,0,0,0,,{\\k20}la la
+Dialogue: 0,0:10:10.00,0:10:12.00,Default,,0,0,0,,{\\i1}Hello!{\\i0}
+`;
+
+/** Speech-like cues every ~3.5 s with varied lengths, from `from` for `count` lines. */
+function speech(from: number, count: number): Cue[] {
+  const cues: Cue[] = [];
+  let t = from;
+  for (let i = 0; i < count; i++) {
+    const len = 1200 + ((i * 7919) % 2300);
+    cues.push({ start: t, end: t + len });
+    t += len + 300 + ((i * 104729) % 1700);
+  }
+  return cues;
+}
+
+describe("anchor sync", () => {
+  it("keeps spoken lines and drops signs, songs, positioned text and duplicate layers", () => {
+    expect(dialogueCues(ASS)).toEqual([
+      { start: 605000, end: 607500 },
+      { start: 610000, end: 612000 }
+    ]);
+  });
+
+  it("reads picture subtitle timing from packet times and sizes", () => {
+    const csv = "715.006000,4231\n716.007000,30\n716.216000,24477\n718.760000,30\n718.968000,19846\n721.429000,30\n";
+    expect(imageCues(csv)).toEqual([
+      { start: 715006, end: 716007 },
+      { start: 716216, end: 718760 },
+      { start: 718968, end: 721429 }
+    ]);
+  });
+
+  it("parses SRT and ASS cues", () => {
+    expect(parseCues("1\n00:00:01,460 --> 00:00:02,920\nhi\n", ".srt")).toEqual([{ start: 1460, end: 2920 }]);
+    expect(parseCues(ASS, ".ass")).toHaveLength(6);
+  });
+
+  it("retimes SRT and ASS lines by a per-line shift", () => {
+    expect(retime("1\n00:00:01,460 --> 00:00:02,920\nhi\n", ".srt", () => -1000)).toBe("1\n00:00:00,460 --> 00:00:01,920\nhi\n");
+    expect(retime("Dialogue: 0,0:00:05.25,0:00:07.00,Default,,0,0,0,,Hi\n", ".ass", () => -1000)).toBe(
+      "Dialogue: 0,0:00:04.25,0:00:06.00,Default,,0,0,0,,Hi\n"
+    );
+    expect(retime("1\n00:00:00,500 --> 00:00:03,000\nx\n", ".srt", () => -1000)).toBe("1\n00:00:00,000 --> 00:00:02,000\nx\n");
+  });
+
+  it("finds the offset in a window even when lines are split differently", () => {
+    const embedded = speech(600000, 12);
+    // Captions: the same speech 1 s later, each line cut in two, with a little jitter.
+    const captions = embedded.flatMap((c, i) => {
+      const mid = (c.start + c.end) / 2;
+      const j = (i % 3) * 60 - 60;
+      return [
+        { start: c.start + 1000 + j, end: mid + 1000 },
+        { start: mid + 1000, end: c.end + 1000 + j }
+      ];
+    });
+    const measured = measureWindow(embedded, captions);
+    expect(measured).toBeDefined();
+    expect(Math.abs(measured!.offset - -1000)).toBeLessThanOrEqual(60);
+    expect(measured!.score).toBeGreaterThan(0.8);
+  });
+
+  it("refuses a window with no real match", () => {
+    expect(measureWindow(speech(600000, 12), [{ start: 0, end: 1000 }, { start: 2000, end: 3000 }, { start: 4000, end: 5000 }])).toBeUndefined();
+    expect(measureWindow([{ start: 1, end: 2 }], speech(0, 10))).toBeUndefined();
+  });
+
+  it("drops a lone chance match and keeps a real change that later windows share", () => {
+    const w = (from: number, offset: number, alternatives: Array<{ offset: number; score: number }> = []) => ({
+      from, to: from + 40000, measured: { offset, score: 0.9, alternatives }
+    });
+    // 716 s fit best at +16.1 s by chance, with the true -0.84 s close behind.
+    expect(agreeAnchors([w(215000, -920), w(458000, -960), w(716000, 16120, [{ offset: -840, score: 0.88 }]), w(1217000, -905)]).map((a) => a.offset))
+      .toEqual([-920, -960, -840, -905]);
+    // No alternative: the lone outlier is set aside.
+    expect(agreeAnchors([w(215000, -920), w(458000, -960), w(716000, 16120), w(1217000, -905)]).map((a) => a.offset)).toEqual([-920, -960, -905]);
+    // A recap inserted halfway: the last two windows agree with each other, so both stay.
+    expect(agreeAnchors([w(215000, -900), w(458000, -950), w(716000, 4000), w(974000, 4050)]).map((a) => a.offset)).toEqual([-900, -950, 4000, 4050]);
+  });
+
+  it("finds the shift most windows support even when most best fits are chance matches", () => {
+    const w = (from: number, offset: number, alternatives: Array<{ offset: number; score: number }> = []) => ({
+      from, to: from + 40000, measured: { offset, score: 0.9, alternatives }
+    });
+    // Picture subtitles on a Blu-ray release.
+    expect(
+      agreeAnchors([
+        w(458000, 17080, [{ offset: 400, score: 0.88 }]),
+        w(716000, -120, [{ offset: 320, score: 0.85 }]),
+        w(974000, 320),
+        w(1217000, -11400, [{ offset: 160, score: 0.86 }])
+      ]).map((a) => a.offset)
+    ).toEqual([400, 320, 320, 160]);
+  });
+
+  it("follows a shift that changes several times, instead of pulling windows to the commonest one", () => {
+    const w = (minute: number, offset: number, alternatives: Array<{ offset: number; score: number }> = [], score = 0.9) => ({
+      from: minute * 60000, to: (minute + 1) * 60000, measured: { offset, score, alternatives }
+    });
+    // A Dutch subtitle on a remux: the subtitle was cut for other
+    // breaks, so its shift steps from -2.2 s to -4.5, -7.0, -9.6 and -12.1 s. The first shift fits
+    // the most windows and is a near-best fit in several later ones.
+    const windows = [
+      ...[0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12].map((m) => w(m, -2200)),
+      w(8, 11080, [{ offset: -2160, score: 0.85 }]),
+      w(13, -4560, [{ offset: -2200, score: 0.84 }]),
+      w(15, -4500), w(16, -4500), w(17, -4640),
+      w(19, 7720, [{ offset: -4800, score: 0.86 }, { offset: -2240, score: 0.85 }]),
+      w(20, 18720, [{ offset: -4300, score: 0.85 }, { offset: -2240, score: 0.84 }]),
+      w(23, -4800, [{ offset: -2240, score: 0.83 }]),
+      w(24, -7000, [{ offset: -4720, score: 0.82 }]),
+      w(25, -6960, [{ offset: -3080, score: 0.82 }]),
+      w(26, -7200), w(27, -7100), w(28, -7200),
+      w(29, -9600), w(30, -9500), w(31, -9800),
+      w(33, 19840, [{ offset: -9480, score: 0.85 }]),
+      w(34, -12100), w(35, -12100), w(36, -12200)
+    ];
+    const settled = new Map(agreeAnchors(windows).map((a) => [a.from / 60000, a.offset]));
+    expect([8, 13, 17, 19, 20, 23, 24, 25, 33].map((m) => settled.get(m))).toEqual([-2160, -4560, -4640, -4800, -4300, -4800, -7000, -6960, -9480]);
+    expect(settled.size).toBe(windows.length);
+    // One window off on its own, between windows that agree, is passed over.
+    expect(agreeAnchors([w(0, -2200), w(1, -2200), w(2, 9000), w(3, -2200), w(4, -2200)]).map((a) => a.offset)).toEqual([-2200, -2200, -2200, -2200]);
+    // A change seen in the last window only isn't trusted yet.
+    expect(agreeAnchors([w(0, -2200), w(1, -2200), w(2, -2200), w(3, -7000)]).map((a) => a.offset)).toEqual([-2200, -2200, -2200]);
+    // Windows may come in any order.
+    expect(agreeAnchors([w(3, -4500), w(0, -2200), w(2, -4500), w(1, -2200)]).map((a) => a.offset)).toEqual([-2200, -2200, -4500, -4500]);
+  });
+
+  it("doesn't trust a shift that jumps about more than cuts can explain", () => {
+    const at = (offsets: number[]) => offsets.map((offset, i) => ({ from: i * 60000, to: (i + 1) * 60000, offset, score: 0.9 }));
+    // An episode cut at four breaks: five runs, four changes.
+    const stepped = at([...Array(13).fill(-2200), ...Array(9).fill(-4500), ...Array(5).fill(-7000), ...Array(5).fill(-9600), ...Array(6).fill(-12100)]);
+    expect(shiftChanges(stepped)).toBe(4);
+    expect(holdsTogether(stepped)).toBe(true);
+    // A subtitle for a shorter version of a film: every window a chance fit.
+    const scattered = at([-2400, -2500, -2100, 300, 2400, 2100, 1700, 5000, 5200, 3300, 300, 600, 700, 3500, 6000, 6200, 3200, 400, 800, 5100, 8400, 5900, 6200, 8000, 7900, 7100, 6500]);
+    expect(shiftChanges(scattered)).toBe(13);
+    expect(holdsTogether(scattered)).toBe(false);
+    // Few windows: up to three changes pass, and a slow drift is no change at all.
+    expect(holdsTogether(at([0, 3000, 6000, 9000, 9000]))).toBe(true);
+    expect(holdsTogether(at([0, 3000, 6000, 9000, 12000]))).toBe(false);
+    expect(shiftChanges(at([0, 300, 600, 900, 1200, 1500]))).toBe(0);
+    // A subtitle running slightly fast creeps between its cuts: only the cuts count.
+    expect(shiftChanges(at([-5200, -4600, -3800, -3200, -2200, -4000, -3200, -2600, -4800, -4000, -6100]))).toBe(3);
+  });
+
+  it("uses one shift when anchors agree", () => {
+    const shift = planShifts(
+      [
+        { from: 100000, to: 145000, offset: -1000, score: 0.9 },
+        { from: 500000, to: 545000, offset: -1100, score: 0.9 },
+        { from: 900000, to: 945000, offset: -950, score: 0.9 },
+        { from: 1200000, to: 1245000, offset: -1300, score: 0.9 }
+      ],
+      speech(0, 300)
+    );
+    expect(shift(0)).toBe(-1000);
+    expect(shift(1200000)).toBe(-1000);
+  });
+
+  it("changes shift at the longest silence between disagreeing anchors", () => {
+    const captions = [...speech(0, 120), ...speech(700000, 120)].sort((a, b) => a.start - b.start);
+    const shift = planShifts(
+      [
+        { from: 200000, to: 245000, offset: -1000, score: 0.9 },
+        { from: 900000, to: 945000, offset: 4000, score: 0.9 }
+      ],
+      captions
+    );
+    const lastBefore = speech(0, 120).at(-1)!.end;
+    expect(shift(lastBefore - 1)).toBe(-1000);
+    expect(shift(700000)).toBe(4000);
+  });
+
+  it("gives a stretch whose windows wobble its median shift, not its first window's", () => {
+    // Every window within 0.5 s of the next, but 0.78 s apart overall, around a true shift near 0.
+    const offsets = [455, 150, -200, 280, -200, 15, 120, 225, 200, 160, -160, 0, 55, -320, 40, 90];
+    const shift = planShifts(offsets.map((offset, i) => ({ from: i * 60000, to: (i + 1) * 60000, offset, score: 0.9 })), speech(0, 300));
+    expect(shift(0)).toBe(90);
+    expect(shift(900000)).toBe(90);
+  });
+
+  it("gives each stretch between two steps its own median", () => {
+    const captions = [...speech(0, 150), ...speech(700000, 150)].sort((a, b) => a.start - b.start);
+    const at = (from: number, offset: number) => ({ from, to: from + 60000, offset, score: 0.9 });
+    const shift = planShifts([at(60000, 400), at(180000, -100), at(300000, 200), at(900000, 3600), at(1020000, 4100), at(1140000, 3800)], captions);
+    expect(shift(1000)).toBe(200);
+    expect(shift(1100000)).toBe(3800);
+  });
+});
+
+describe("adaptive windows", async () => {
+  const { refinementStarts } = await import("../src/sync.js");
+  const w = (from: number) => ({ from, to: from + 40000, cues: [] });
+  const a = (from: number, offset: number) => ({ from, to: from + 40000, offset, score: 0.9 });
+
+  it("reads nothing more when every spot matched and agreed", () => {
+    const found = { duration: 1430000, windows: [w(214000), w(456000), w(712000), w(968000), w(1210000)] };
+    expect(refinementStarts(found, [a(214000, 900), a(456000, 950), a(712000, 880), a(968000, 920), a(1210000, 900)])).toEqual([]);
+  });
+
+  it("reads around empty spots, between disagreeing ones, and early on", () => {
+    const found = { duration: 1430000, windows: [w(214000), w(456000), w(712000), w(968000), w(1210000)] };
+    const starts = refinementStarts(found, [a(712000, 2810), a(968000, 2935), a(1210000, 2920)]);
+    expect(starts.length).toBeGreaterThan(2);
+    expect(starts.length).toBeLessThanOrEqual(6);
+    expect(starts.some((t) => t < 214000)).toBe(true); // before the first empty spot
+    expect(starts.every((t) => t >= 0 && t <= 1430000 - 60000)).toBe(true);
+  });
+
+  it("bridges the stretch between disagreeing anchors, capped, and nothing when they agree", async () => {
+    const { bridgeSpans } = await import("../src/sync.js");
+    expect(bridgeSpans({ windows: [] }, [a(496000, 1200), { from: 604000, to: 664000, offset: 1240, score: 0.9 }, a(712000, 2810)])).toEqual([{ from: 664000, length: 48000 }]);
+    expect(bridgeSpans({ windows: [] }, [a(100000, 1200), a(712000, 2810)])).toEqual([{ from: 336000, length: 180000 }]);
+    expect(bridgeSpans({ windows: [] }, [a(100000, 1200), a(712000, 1300)])).toEqual([]);
+  });
+
+  it("puts the step at the pause that lets the most reference lines fit", async () => {
+    const { placeStep } = await import("../src/sync.js");
+    // Captions every 4 s; the reference follows them +1.0 s until 60 s (caption time), +3.0 s after.
+    const captions: Cue[] = [];
+    for (let t = 0; t < 120000; t += 4000) captions.push({ start: t, end: t + 2500 });
+    const reference = captions.map((c) => {
+      const shift = c.start < 60000 ? 1000 : 3000;
+      return { start: c.start + shift, end: c.end + shift };
+    });
+    const at = placeStep({ from: 0, to: 30000, offset: 1000, score: 0.9 }, { from: 90000, to: 120000, offset: 3000, score: 0.9 }, captions, reference);
+    expect(at).toBeGreaterThan(56500);
+    expect(at).toBeLessThan(60000);
+  });
+});
+
+describe("a link that serves something other than the listed file", () => {
+  it("is a short clip far smaller than the listed file, and only that", () => {
+    // A stand-in while the debrid file isn't ready: 8 MB, 30 s, for a 1 GB file.
+    expect(servesListedFile(1_000_000_000, 8_000_000, 30_000)).toBe(false);
+    expect(servesListedFile(1_000_000_000, 1_000_000_000, 1_400_000)).toBe(true);
+    // Listed sizes are rounded or estimated: a few percent off is the same file.
+    expect(servesListedFile(1_800_000_000, 1_803_000_000, 1_400_000)).toBe(true);
+    // An episode in a pack listed at the pack's size: small against it, but as long as an episode.
+    expect(servesListedFile(100_000_000_000, 400_000_000, 1_400_000)).toBe(true);
+    // A short file of about its listed size.
+    expect(servesListedFile(50_000_000, 48_000_000, 60_000)).toBe(true);
+    // Unknown on either side: nothing to compare, so it passes.
+    expect(servesListedFile(undefined, 8_000_000, 30_000)).toBe(true);
+    expect(servesListedFile(1_000_000_000, undefined, 30_000)).toBe(true);
+  });
+});
