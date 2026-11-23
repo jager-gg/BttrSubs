@@ -38,8 +38,20 @@ import type { Role } from "./access.js";
 import { bubsScripts, escapeHtml, pageHead, scriptJson, uiUrl, WORDMARK } from "./ui.js";
 
 /** The languages offered as chips, after English Dub and English. */
-const COMMON_LANGUAGES = ["Spanish", "Spanish (LA)", "Spanish (EU)", "French", "Portuguese", "German", "Italian", "Arabic", "Russian", "Turkish", "Polish", "Dutch", "Indonesian", "Malay", "Persian", "Urdu", "Japanese", "Korean", "Vietnamese"];
+const COMMON_LANGUAGES = [
+  "Spanish (LA)", "Spanish (EU)", "French", "Portuguese", "Portuguese (BR)", "German",
+  "Italian", "Arabic", "Russian", "Chinese (Simplified)", "Chinese (Traditional)", "Japanese",
+  "Korean", "Hindi", "Turkish", "Polish", "Dutch", "Swedish", "Danish", "Finnish", "Norwegian",
+  "Romanian", "Greek", "Hebrew", "Hungarian", "Czech", "Ukrainian", "Thai", "Vietnamese", "Indonesian",
+  "Malay", "Tagalog", "Persian", "Urdu"
+];
 
+
+/**
+ * A chip's own wording, where the name the server keeps doesn't say which kind it is: "Portuguese" is
+ * Portugal's, beside Brazil's; "Tagalog" is what the sources file Filipino under.
+ */
+const CHIP_LABELS: Record<string, string> = { "Portuguese": "Portuguese (Portugal)", "Portuguese (BR)": "Portuguese (Brazil)", "Tagalog": "Filipino" };
 
 /** What setup.js starts from: the configuration as it stands, without any key or URL. */
 export function setupState(current: Settings | undefined) {
@@ -55,7 +67,7 @@ export function setupState(current: Settings | undefined) {
     regularEnglish: REGULAR_ENGLISH,
     languages: COMMON_LANGUAGES,
     // The names shown for the ones a player shows under a fuller name (a regional kind, variants.ts).
-    languageLabels: Object.fromEntries(COMMON_LANGUAGES.map((l) => [l, languageLabel(l)]).filter(([l, label]) => label !== l)),
+    languageLabels: Object.fromEntries(COMMON_LANGUAGES.map((l) => [l, CHIP_LABELS[l] ?? languageLabel(l)]).filter(([l, label]) => label !== l)),
     // This server's own AIOStreams first, then the public ones it accepts.
     instances: [...(config.ownAiostreams ? [config.ownAiostreams] : []), ...PUBLIC_AIOSTREAMS.filter((o) => config.allowedAiostreams.includes(o) && o !== config.ownAiostreams)],
     own: Boolean(config.ownAiostreams),

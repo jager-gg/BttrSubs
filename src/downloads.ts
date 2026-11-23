@@ -35,6 +35,45 @@ export interface SourceKeys {
 const ZIP_SIGNATURE = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
 const isZip = (buffer: Buffer) => buffer.subarray(0, 4).equals(ZIP_SIGNATURE);
 
+/**
+ * A pack's bytes with every repeated file name made its own. The zip reader refuses a whole archive
+ * that lists one name twice, and uploaded packs do. Later entries under a name already taken get a
+ * "~" and a number over the end of their name in the archive's directory (the same length, so nothing
+ * else moves): the first keeps the name, the rest stop looking like subtitles and are passed over.
+ * The buffer is returned as it is when it holds no repeat or doesn't read as a zip.
+ */
+export function withOwnNames(buffer: Buffer): Buffer {
+  // The end record: the last "PK\x05\x06", then the directory's size and offset.
+  const end = buffer.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  if (end < 0 || end + 22 > buffer.length) return buffer;
+  const from = buffer.readUInt32LE(end + 16);
+  const names: Array<{ at: number; length: number; name: string }> = [];
+  for (let at = from; at + 46 <= end && buffer.readUInt32LE(at) === 0x02014b50; ) {
+    const length = buffer.readUInt16LE(at + 28);
+    names.push({ at: at + 46, length, name: buffer.toString("latin1", at + 46, at + 46 + length) });
+    at += 46 + length + buffer.readUInt16LE(at + 30) + buffer.readUInt16LE(at + 32);
+  }
+  const taken = new Set<string>();
+  let out = buffer;
+  for (const entry of names) {
+    if (!taken.has(entry.name)) {
+      taken.add(entry.name);
+      continue;
+    }
+    for (let n = 1; n < 10_000; n++) {
+      const tail = `~${n}`;
+      if (tail.length > entry.length) break;
+      const renamed = entry.name.slice(0, entry.length - tail.length) + tail;
+      if (taken.has(renamed)) continue;
+      if (out === buffer) out = Buffer.from(buffer);
+      out.write(tail, entry.at + entry.length - tail.length, "latin1");
+      taken.add(renamed);
+      break;
+    }
+  }
+  return out;
+}
+
 const exists = (file: string) => stat(file).then(() => true, () => false);
 
 /** Extensions a stored subtitle can have, in the order they're looked for. */
@@ -301,7 +340,7 @@ export async function knownMissing(ref: string | number, season: number | undefi
     const buffer = await readFile(downloadFile(String(ref))).catch(() => undefined);
     if (!buffer || !isZip(buffer)) return false;
     try {
-      holds = Boolean(selectArchiveEntry(new AdmZip(buffer), season, episode, pick));
+      holds = Boolean(selectArchiveEntry(new AdmZip(withOwnNames(buffer)), season, episode, pick));
     } catch {
       return false;
     }
@@ -374,7 +413,7 @@ async function storeSubtitleFile(
     return { file, filename: path.basename(file) };
   }
 
-  const entry = selectArchiveEntry(new AdmZip(buffer), season, episode, pick);
+  const entry = selectArchiveEntry(new AdmZip(withOwnNames(buffer)), season, episode, pick);
   if (!entry) {
     await writeFile(missingFile(cacheStem), "");
     const notInPack = new Error(`Subtitle ${id} is an archive without S${season}E${episode} in it.`);

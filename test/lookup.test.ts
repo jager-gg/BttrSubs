@@ -293,3 +293,51 @@ describe("finding the playing file in AIOStreams", () => {
     expect(fileName("A.mkv")).toBe("A.mkv");
   });
 });
+
+describe("a usenet release listed under the name of the file inside it", () => {
+  const NZB = "Show.S03E02.Episode.Title.1080p.BluRay.10bit.EAC3.2.0.x265-TEAM";
+  const INNER = "k3Qm8ZxT1vB7nR5wYc2LdF9pHs6JgA4e.mkv";
+  type Row = { name: string; listed: number; binge?: string; serves: number; at: string };
+  const site = (rows: Row[]) =>
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.includes("/stream/"))
+        return new Response(JSON.stringify({ streams: rows.map((r) => ({ url: `https://usenet.example/${r.at}`, behaviorHints: { filename: r.name, videoSize: r.listed, ...(r.binge ? { bingeGroup: r.binge } : {}) } })) }), { headers: { "content-type": "application/json" } });
+      const row = rows.find((r) => url.endsWith(`/${r.at}`))!;
+      return new Response(new Uint8Array(1), { status: 206, headers: { "content-range": `bytes 0-0/${row.serves}` } });
+    });
+  const OTHER = { name: "Show.S03E02.Episode.Title.EAC3.2.0.1080p.Bluray.x265-TEAM", listed: 700_000_000, binge: "addon|1080p|BluRay|TEAM", serves: 616_000_000, at: "other" };
+
+  it("is read as the playing file when it is the one stream that fits the played name and size", async () => {
+    const before = countedToday("sync.innerName");
+    site([{ name: INNER, listed: 880_000_123, binge: "addon|1080p|BluRay|TEAM", serves: 880_000_123, at: "inner" }, OTHER]);
+    expect(await lookUpStreamAgain(AIO, "tt2:3:2", "series", fileRef(NZB, "1000000000"), [])).toBe("https://usenet.example/inner");
+    expect(countedToday("sync.innerName")).toBe(before + 1);
+  });
+
+  it("isn't, when its release marks aren't the played name's, it has none, or two such streams fit", async () => {
+    site([{ name: INNER, listed: 880_000_123, binge: "addon|2160p|WEB-DL|CREW", serves: 880_000_123, at: "inner" }, OTHER]);
+    expect(await lookUpStreamAgain(AIO, "tt2:3:3", "series", fileRef(NZB, "1000000000"), [])).toBeUndefined();
+    site([{ name: INNER, listed: 880_000_123, serves: 880_000_123, at: "inner" }, OTHER]);
+    expect(await lookUpStreamAgain(AIO, "tt2:3:4", "series", fileRef(NZB, "1000000000"), [])).toBeUndefined();
+    site([
+      { name: INNER, listed: 880_000_123, binge: "addon|1080p|BluRay|TEAM", serves: 880_000_123, at: "inner" },
+      { name: "Qq7wLmN2pRs9TuVx3YzAb4CdEf5GhJk6.mkv", listed: 900_000_000, binge: "addon|1080p|BluRay|TEAM", serves: 900_000_000, at: "second" }
+    ]);
+    expect(await lookUpStreamAgain(AIO, "tt2:3:5", "series", fileRef(NZB, "1000000000"), [])).toBeUndefined();
+  });
+
+  it("isn't, when its size is no share of the played one, listed or served, or the played size is unknown", async () => {
+    site([{ name: INNER, listed: 500_000_000, binge: "addon|1080p|BluRay|TEAM", serves: 500_000_000, at: "small" }]);
+    expect(await lookUpStreamAgain(AIO, "tt2:3:6", "series", fileRef(NZB, "1000000000"), [])).toBeUndefined();
+    site([{ name: INNER, listed: 880_000_123, binge: "addon|1080p|BluRay|TEAM", serves: 21_982, at: "clip" }]);
+    expect(await lookUpStreamAgain(AIO, "tt2:3:7", "series", fileRef(NZB, "1000000000"), [])).toBeUndefined();
+    site([{ name: INNER, listed: 880_000_123, binge: "addon|1080p|BluRay|TEAM", serves: 880_000_123, at: "inner" }]);
+    expect(await lookUpStreamAgain(AIO, "tt2:3:8", "series", NZB, [])).toBeUndefined();
+  });
+
+  it("gives way to a stream under the played name", async () => {
+    site([{ name: INNER, listed: 880_000_123, binge: "addon|1080p|BluRay|TEAM", serves: 880_000_123, at: "inner" }, { name: NZB, listed: 1_000_000_000, binge: "addon|1080p|BluRay|TEAM", serves: 880_000_000, at: "named" }]);
+    expect(await lookUpStreamAgain(AIO, "tt2:3:9", "series", fileRef(NZB, "1000000000"), [])).toBe("https://usenet.example/named");
+  });
+});

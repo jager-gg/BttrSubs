@@ -858,6 +858,8 @@
     const m = String(e.message);
     const status = statusOf(m);
     // Reading the playing file: the download still went out, synced by a fallback or as it came.
+    if (/no stream in AIOStreams/i.test(m)) return "AIOStreams' list didn't hold the playing file under the name the player sent, so the file couldn't be read and its subtitles went out as they came. Playing it again often finds it.";
+    if (/ADM-ZIP/i.test(m)) return "A subtitle pack from a source couldn't be opened, so that one subtitle wasn't timed. The others are unaffected.";
     if (e.where === "sync" || /ffmpeg|ffprobe/i.test(m)) return "Reading the playing file to time the subtitle failed: the stream may have ended early or moved. The request's row in Activity says what the player got.";
     if (/abort|time ?out|timed out/i.test(m)) return "Nothing to do if it's rare: the site was slow, and the next request asks it again. If it repeats every day, the site may be struggling.";
     if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(m)) return "The site's address couldn't be looked up: a DNS problem on this server, or the site's name is gone. If every source shows it, it's this server.";

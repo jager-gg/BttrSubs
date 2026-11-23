@@ -52,7 +52,7 @@ npm run negatives    # every file against every subtitle that isn't its own: non
 | `src/cinemeta.ts` | A title's name, year, TVDB id, genres and country from Cinemeta, shared by the sources (and whether it is anime) |
 | `src/ids.ts`, `src/animelists.ts`, `src/anidb.ts`, `src/animetitles.ts` | Anime: ids other than IMDb, episode numbering, and a show's seasons by their own titles (the season map) |
 | `src/matching.ts`, `src/quality.ts` | Episode matching and ranking |
-| `src/sync.ts`, `src/align.ts` | Retiming a subtitle to the playing file |
+| `src/sync.ts`, `src/align.ts`, `src/trackcheck.ts` | Retiming a subtitle to the playing file, and checking a file's own subtitle track against its voices |
 | `src/mkv.ts`, `src/mp4.ts`, `src/audiowindow.ts`, `src/oshash.ts` | Reading the playing file: its subtitle tracks' timing, stretches of its audio, its hash |
 | `src/vad.ts`, `src/vad-worker.ts`, `src/turns.ts` | Speech in the audio (Silero VAD), and whose turn it is to hear a file |
 | `src/reads.ts`, `src/net.ts`, `src/viewers.ts` | Where a file may be read from, pausing when its host refuses, the daily read limit; fetching addresses a third party gave |

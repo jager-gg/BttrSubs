@@ -2314,3 +2314,40 @@ describe("a track for one kind of Spanish", () => {
     expect(hits.filter((h) => h.includes("api.subdl.com")).map((h) => new URL(h).searchParams.get("languages"))).toEqual(["ES"]);
   }, 15000);
 });
+
+describe("the syncs' head start, on a list one slow source holds to its time", () => {
+  it("starts timing the tracks leading then, so a subtitle that takes longer than the grace to fetch still says Synced", async () => {
+    const lines = dialogue(11);
+    const before = stats.countedToday("lists.headStart");
+    sites((url) => {
+      // One source never answers: the list waits its whole time for it.
+      if (url.hostname === "opensubtitles.stremio.homes") return never();
+      // The subtitle's own download takes 2.5 s: more than the list's grace leaves a sync started at its deadline.
+      if (url.hostname === "api.subsource.net" && /\/subtitles\/9671\/download$/.test(url.pathname)) return later(2500, () => new Response(srt(lines.map((c) => ({ start: c.start - 900, end: c.end - 900 })))));
+      return subsource(url, { arabic: [sub(9671, "Show S01E05", { language: "arabic" })] }, {}, 571);
+    });
+    await fileWithTrack("Show.S01E05.HeadStart.mkv", lines);
+    const answer = await list({ subsource: "sk_head_start_key_012", opensubtitles: true, aiostreams: AIO, languages: ["Arabic"], allowMachine: false, hearingImpaired: "include" }, "tt0005792:1:5", playing("Show.S01E05.HeadStart.mkv"));
+    expect(answer.subtitles.map(refOfTrack)).toEqual(["ss9671"]);
+    expect(answer.subtitles[0].label).toBe("Synced · BttrSubs");
+    // The list itself is no later for it.
+    expect(answer.ms).toBeLessThan(5600);
+    expect(stats.countedToday("lists.headStart")).toBe(before + 1);
+  }, 15000);
+
+  it("isn't taken when every source answers early: the list's own pick has the time", async () => {
+    const lines = dialogue(11);
+    const before = stats.countedToday("lists.headStart");
+    sites((url) => {
+      if (url.hostname === "opensubtitles.stremio.homes") return json({ subtitles: [] });
+      return subsource(url, { arabic: [sub(9672, "Show S01E05", { language: "arabic" })] }, { "9672": srt(lines.map((c) => ({ start: c.start - 900, end: c.end - 900 }))) }, 572);
+    });
+    await fileWithTrack("Show.S01E05.NoHeadStart.mkv", lines);
+    const answer = await list({ subsource: "sk_head_start_key_013", opensubtitles: true, aiostreams: AIO, languages: ["Arabic"], allowMachine: false, hearingImpaired: "include" }, "tt0005793:1:5", playing("Show.S01E05.NoHeadStart.mkv"));
+    expect(answer.subtitles[0].label).toBe("Synced · BttrSubs");
+    expect(answer.ms).toBeLessThan(3000);
+    // Its timer runs out after the list has gone: nothing is started by it.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    expect(stats.countedToday("lists.headStart")).toBe(before);
+  }, 15000);
+});
