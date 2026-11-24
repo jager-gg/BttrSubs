@@ -95,13 +95,14 @@ describe("English Dub and regular English", async () => {
 });
 
 describe("whether a sync is good enough to serve", () => {
-  it("is one rule everywhere: anchors, and speech only on a file with no subtitle track", async () => {
+  it("is one rule everywhere: anchors, and speech only on a file with no subtitle track or one whose track is off the voices", async () => {
     const { syncedWell } = await import("../src/app.js");
     const anchors = [{ from: 0, to: 60000, offset: 500, score: 0.9 }];
     expect(syncedWell({ file: "x.srt", anchors })).toBe(true);
     expect(syncedWell({ file: "x.srt", anchors: [] })).toBe(false);
     expect(syncedWell({ file: "x.srt", anchors, bySpeech: true })).toBe(false);
     expect(syncedWell({ file: "x.srt", anchors, bySpeech: true, speechOnly: true })).toBe(true);
+    expect(syncedWell({ file: "x.srt", anchors, bySpeech: true, overTrack: true })).toBe(true);
     expect(syncedWell({ file: "x.srt", anchors, byLines: true })).toBe(true);
     expect(syncedWell(undefined)).toBe(false);
     expect(syncedWell("late")).toBe(false);

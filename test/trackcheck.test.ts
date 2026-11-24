@@ -2,8 +2,10 @@
  * The check of a file's own subtitle track against its voices (trackcheck.ts): where it listens, and
  * which of a subtitle's two timings it finds on the voices heard.
  */
-import { describe, expect, it } from "vitest";
-import { TRACK_CHECK, trackCheckSpots, voicesSay, type VoiceSpot } from "../src/trackcheck.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { TRACK_CHECK, trackCheckSpots, trackOffVoices, voicesSay, type VoiceSpot } from "../src/trackcheck.js";
+import { openBench, type Bench } from "./serve.js";
+import { episode, faithful, heard, indexFile, retimedByOthers } from "./synthetic.js";
 
 /** The same numbers every run. */
 function seeded(seed: number): () => number {
@@ -97,5 +99,82 @@ describe("which timing is on the voices", () => {
     const said = voicesSay(came, early, spots);
     const second = came.filter((s) => s + TRACK_CHECK.leadMs >= 25 * 60_000 + 300 && s + TRACK_CHECK.leadMs <= 25 * 60_000 + TRACK_CHECK.spanMs - 300).length;
     expect(said.came.lines).toBe(second);
+  });
+});
+
+describe("whether the voices put the file's own track off them", () => {
+  const voices = voicesOf(21);
+  // Five stretches heard, as when speech times a subtitle that fits nothing in the track.
+  const spots = heardAt(voices, [0.15, 0.32, 0.5, 0.68, 0.85].map((share) => Math.round(DURATION * share)));
+  // A track taken from another cut: further from the audio after each break, by seconds.
+  const fromAnotherCut = (start: number) => (start < 6 * 60_000 ? -1500 : start < 15 * 60_000 ? -3300 : start < 24 * 60_000 ? -5500 : -7500);
+  const placed = linesFor(voices, 22);
+
+  it("is off, when its lines land where voices fall at random and the subtitle's land on them", () => {
+    const track = linesFor(voices, 23).map((start) => start + fromAnotherCut(start));
+    const said = trackOffVoices(placed, track, spots);
+    expect(said.off).toBe(true);
+    expect(said.track.lines).toBeGreaterThanOrEqual(TRACK_CHECK.trackLines);
+    expect(said.track.met).toBeLessThanOrEqual(said.chance * said.track.lines);
+    expect(said.subtitle.met).toBeGreaterThan(said.subtitle.lines * 0.7);
+  });
+
+  it("is on, for a track made for the audio heard", () => {
+    expect(trackOffVoices(placed, linesFor(voices, 23), spots).off).toBe(false);
+  });
+
+  it("is on, for a track timed to another language's audio while a dub's voices are heard", () => {
+    // Each dub line starts up to 0.6 s from where the original's does, either way.
+    const next = seeded(24);
+    const original = linesFor(voices, 23).map((start) => start + Math.round((next() - 0.5) * 1200));
+    const said = trackOffVoices(placed, original, spots);
+    expect(said.track.met).toBeGreaterThan(said.chance * said.track.lines);
+    expect(said.off).toBe(false);
+  });
+
+  it("says nothing on too few of the track's lines, or when the subtitle isn't on the voices either", () => {
+    const track = linesFor(voices, 23).map((start) => start + fromAnotherCut(start));
+    const one = heardAt(voices, [Math.round(DURATION * 0.5)]).map((s) => ({ ...s, to: s.from + 20_000 }));
+    expect(trackOffVoices(placed, track, one).track.lines).toBeLessThan(TRACK_CHECK.trackLines);
+    expect(trackOffVoices(placed, track, one).off).toBe(false);
+    expect(trackOffVoices(linesFor(voicesOf(99), 22), track, spots).off).toBe(false);
+    expect(trackOffVoices(placed, track, []).off).toBe(false);
+  });
+});
+
+describe("a subtitle timed by speech on a file whose own track is off the voices, in a play", () => {
+  let bench: Bench;
+
+  beforeAll(async () => {
+    bench = await openBench(".cache-trackoff-test");
+  });
+
+  afterAll(async () => {
+    await bench?.close();
+  });
+
+  it("keeps the timing the voices give it: the track's lines neither refine nor snap it", async () => {
+    const outcome = await bench.serve({
+      name: "track-off-voices",
+      about: "a release whose own subtitles were taken from another cut, off its audio by a different amount every minute",
+      file: "index",
+      lang: "English",
+      today: { synced: true, floor: { "0.3": 0, "0.1": 0 } },
+      build: () => {
+        const ep = episode(131, { minutes: 42 });
+        // Seconds off, by another amount each minute: no shift, nor a shift per stretch, fits the subtitle to it.
+        const offBy = [-3300, -5500, -4200, -7500, -3600, -6400, -4900, -6900];
+        // Its lines split and joined otherwise than the subtitle's, as another cut's subtitles are.
+        const track = retimedByOthers(faithful(ep.lines), 133, { merge: 0.3, split: 0.3 }).map((c) => {
+          const by = offBy[Math.floor(c.start / 60_000) % offBy.length];
+          return { start: c.start + by, end: c.end + by };
+        });
+        return { record: indexFile(ep.duration, [track], heard(ep.lines, 132)), subtitle: faithful(ep.lines) };
+      }
+    });
+    expect(outcome.method).toBe("speech");
+    expect(outcome.log.some((line) => /the track is off the voices, not followed/.test(line))).toBe(true);
+    expect(outcome.log.some((line) => /snapped|met by the file's own lines/.test(line))).toBe(false);
+    expect(outcome.within!["0.1"]).toBe(1);
   });
 });

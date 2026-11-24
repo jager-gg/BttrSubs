@@ -128,7 +128,7 @@ You also choose whether hearing-impaired subtitles are included, left out or the
 | Switch | Starts | When it's on |
 |---|---|---|
 | Keep the subtitle's own styling | On | A subtitle uploaded as ASS keeps its fonts, colours and positions. Off sends subtitles as plain SRT, unless a style, Signs & songs or the file's own style applies |
-| Remove sound descriptions | Off | [door creaks], (laughs), sung ♪ lines and speaker names like JOHN: are taken out. The timing stays the same |
+| Remove sound descriptions | Off | [door creaks], (laughs), sung ♪ lines and speaker names like JOHN: are taken out, and Mary: too in captions that name every speaker. The timing stays the same |
 | Signs & songs with English Dub | Off | Anime only. The on-screen text and song lines a fan release typesets are shown with English Dub, timed to your file. Needs a player that shows ASS |
 | Use your file's subtitle style | Off | Every subtitle takes the font, size and colours of the subtitles inside your file |
 

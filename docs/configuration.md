@@ -71,8 +71,9 @@ These are taken out of the text:
 - A line that is only a (parenthesised) sound, in lower case or capitals.
 - Sung lines (♪).
 - Speaker names in capitals, such as "JOHN:".
+- In captions that name every speaker in normal case ("Mary: …", "Guard #2: …"), those names too, and the (parenthesised) sounds that open or close a speaker's line.
 
-The timing doesn't change, because the sync runs first. A line left empty is dropped. Names, thoughts and signs written in normal case stay, and parentheses in Arabic always stay.
+The timing doesn't change, because the sync runs first. A line left empty is dropped. In any other subtitle, names, thoughts and signs written in normal case stay, and parentheses in Arabic always stay.
 
 ### Signs & songs with English Dub
 

@@ -33,7 +33,7 @@ import { jellyfinItemIds, jellyfinVersions } from "./aiostreamsJellyfin.js";
 import { extractEpisodeMarkers, extractSeasonMarkers } from "./matching.js";
 import { kitsuEpisode } from "./ids.js";
 import { FILM_FRAME_MS, keptInOrder, linesOverShift, onFileLines, timingByLines } from "./align.js";
-import { TRACK_CHECK, trackCheckSpots, voicesSay, type VoiceSpot } from "./trackcheck.js";
+import { TRACK_CHECK, trackCheckSpots, trackOffVoices, voicesSay, type VoiceSpot } from "./trackcheck.js";
 import { backgroundReadFits, checkHost, checkReadable, checkReads, fetchFile, noteRead, noteReadOk, noteRefusal, PrivateHost, ReadsPaused, refusalStatus } from "./reads.js";
 
 export interface Cue {
@@ -3189,6 +3189,16 @@ function voiceSpotsFile(filename: string): string {
   return anchorsFile(filename).replace(/\.json$/, ".spots");
 }
 
+/** The stretches of a file whose speech has been heard, as the track check counts them. */
+function voiceSpotsOf(found: FileAnchors): VoiceSpot[] {
+  return found.windows.filter((w) => w.speech?.length).map((w) => ({ from: w.from, to: w.to, speech: w.speech! }));
+}
+
+/** Where the file's own track's lines start, once each, from the windows read from it. */
+function trackStartsOf(found: FileAnchors): number[] {
+  return [...new Set(found.windows.filter((w) => !w.heard).flatMap((w) => w.cues.map((c) => c.start)))];
+}
+
 /** The stretches of a file heard for its track check, when they have been. */
 async function keptVoiceSpots(filename: string): Promise<VoiceSpot[] | undefined> {
   try {
@@ -4684,7 +4694,7 @@ export interface SyncResult {
   filename?: string;
   source?: string;
   /** Timed by speech heard in the audio, the last resort (see bySpeech): alternates timed by the
-   * file's own subtitles are preferred over it. */
+   * file's own subtitles are preferred over it, unless that track is off the voices (overTrack). */
   bySpeech?: boolean;
   /** The file has no subtitle track, so speech was all there was: no alternate can do better. */
   speechOnly?: boolean;
@@ -4720,6 +4730,11 @@ export interface SyncResult {
   trackCheckPending?: boolean;
   /** Served as it came: the voices heard are met by its own timing and not by the track's (trackcheck.ts). */
   asCame?: boolean;
+  /**
+   * Timed by speech on a file whose own track the same voices show to be off them (trackOffVoices):
+   * no alternate that fits the track is preferred over it.
+   */
+  overTrack?: boolean;
   /**
    * With speechPending, once MORE_SPOTS are heard: where the audio is heard next, for a step speech
    * hints at and can't place (stepSpots). Kept with the result, so the read can be started again.
@@ -4772,7 +4787,7 @@ export function firstPassSync(key: string): SyncResult | undefined {
 }
 
 /** Bumped when the sync method changes: older results are ignored and download URLs change, so no cache keeps old timing. */
-export const SYNC_VERSION = 36;
+export const SYNC_VERSION = 37;
 
 /**
  * Whether captions belong to the file at all: at least half of the measured
@@ -4944,9 +4959,10 @@ export function syncKey(ref: string | number, season: number | undefined, episod
 /**
  * What's already known about syncing this subtitle to this file, read from
  * earlier results only (nothing is fetched): "unsynced" when the file has no
- * embedded subtitles to sync to, or this subtitle matched none of them.
+ * embedded subtitles to sync to, or this subtitle matched none of them. "voices": timed by speech on a
+ * file whose own track the voices show to be off them (overTrack), where speech is the timing to keep.
  */
-export async function knownSync(key: string, filename: string): Promise<"synced" | "speech" | "unsynced" | "wrong" | "unknown"> {
+export async function knownSync(key: string, filename: string): Promise<"synced" | "speech" | "voices" | "unsynced" | "wrong" | "unknown"> {
   try {
     const done = JSON.parse(await readFile(path.join(cachePath("synced"), `${key}.json`), "utf8")) as SyncResult;
     // Timed (or left) by a file's first five windows of speech while more was heard: once it has
@@ -4957,7 +4973,7 @@ export async function knownSync(key: string, filename: string): Promise<"synced"
       if (now && !speechStillToHear(done, now) && (now.rounds ?? 0) > 0) return "unknown";
     }
     if (done.noFit) return "wrong";
-    if (done.bySpeech && done.anchors.length > 0) return "speech";
+    if (done.bySpeech && done.anchors.length > 0) return done.overTrack ? "voices" : "speech";
     return done.anchors.length > 0 ? "synced" : "unsynced";
   } catch {}
   try {
@@ -5297,8 +5313,25 @@ export function syncCaptions(
     // anchors again with followShifts did no better: over the stored plays, 59.8% of those lines
     // within 0.3 s against 60.2%. Every test above judged the plan; the timing followShifts makes of
     // it must account for the whole file as well, or the plan is served (see timingByStarts).
+    // A translation timed by speech on a file whose own track the same voices show to be off them
+    // (trackOffVoices) keeps the timing speech gave it: the track's lines neither refine nor snap it,
+    // and no subtitle that fits the track takes its place (overTrack, see syncedWell).
+    let overTrack = false;
+    if (heard && lang && !found.speechOnly) {
+      const bySpeech = planShifts(anchors, captions, reference);
+      const said = trackOffVoices(
+        captions.map((c) => c.start + bySpeech(c.start)),
+        trackStartsOf(found),
+        voiceSpotsOf(found)
+      );
+      if (said.off) {
+        overTrack = true;
+        count("sync.overTrack");
+        console.log(`sync: ${filename}: against the voices heard, ${said.subtitle.met} of ${said.subtitle.lines} line starts meet one as speech times them and ${said.track.met} of ${said.track.lines} of the file's own track (chance ${Math.round(said.chance * 100)}%): the track is off the voices, not followed`);
+      }
+    }
     const fileLines = found.windows.flatMap((w) => w.cues);
-    const followed = lang && !lineTimed && !startTimed && !found.speechOnly ? timingByStarts(anchors, captions, fileLines, heard, found) : undefined;
+    const followed = lang && !lineTimed && !startTimed && !found.speechOnly && !overTrack ? timingByStarts(anchors, captions, fileLines, heard, found) : undefined;
     if (followed) {
       if (heard) console.log(`sync: ${filename}: the timing heard in speech is met by the file's own lines: timed by them`);
       anchors = followed.anchors;
@@ -5439,7 +5472,7 @@ export function syncCaptions(
     console.log(`sync: ${filename}: ${anchors.map((a) => `${Math.round(a.from / 1000)}s ${a.offset >= 0 ? "+" : ""}${a.offset}ms (${a.score})`).join(", ")}${done.length ? `; ${done.join(", ")}` : ""}`);
     const timedBy = lineTrack ?? track;
     const measuredBy = heard || found.speechOnly || timedBy === undefined ? "speech" : (stored.trackLangs?.[String(timedBy === "first" ? stored.track : timedBy)] ?? "und");
-    const result: SyncResult = { file: out, anchors, filename, source: path.basename(source.file), ...(heard ? { bySpeech: true } : {}), ...(found.speechOnly ? { speechOnly: true } : {}), ...(lineTimed ? { byLines: true } : {}), ...(startTimed ? { byStarts: true } : {}), ...(factor !== 1 ? { factor } : {}), ...(voiceShift !== undefined ? { voiceShift } : {}), reference: measuredBy, ...(timed.nudges.size ? { snapped: timed.nudges.size } : {}), ...(movedLines ? { moved: movedLines } : {}) };
+    const result: SyncResult = { file: out, anchors, filename, source: path.basename(source.file), ...(heard ? { bySpeech: true } : {}), ...(overTrack ? { overTrack: true } : {}), ...(found.speechOnly ? { speechOnly: true } : {}), ...(lineTimed ? { byLines: true } : {}), ...(startTimed ? { byStarts: true } : {}), ...(factor !== 1 ? { factor } : {}), ...(voiceShift !== undefined ? { voiceShift } : {}), reference: measuredBy, ...(timed.nudges.size ? { snapped: timed.nudges.size } : {}), ...(movedLines ? { moved: movedLines } : {}) };
     // Dub captions the track timed on a file whose English audio is still to be heard: it is read in
     // the background, and these are synced again by it on the next request (see hearDubVoices).
     // Not for the file's own track (ownTimed): the voices wouldn't move it.

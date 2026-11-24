@@ -208,7 +208,7 @@ describe("a slow source", () => {
     expect(row.detail?.client).toMatch(/\S/);
   }, 15000);
 
-  it("doesn't record Anime Tosho for a title that isn't anime: it is asked nothing there", async () => {
+  it("doesn't record Anime Tosho or the season map for a title that isn't anime: they are asked nothing there", async () => {
     sites((url) => (url.hostname === "opensubtitles.stremio.homes" ? json({ subtitles: [] }) : undefined));
     await list({ opensubtitles: true, languages: ["English", "Arabic"], allowMachine: false, hearingImpaired: "include" }, "tt0000705:1:5");
     const row = stats.activityPage({ kind: "list", limit: 50 }).rows[0];
@@ -216,6 +216,7 @@ describe("a slow source", () => {
     expect(names).toContain("OpenSubtitles");
     expect(names).not.toContain("Anime Tosho");
     expect(row.detail?.late ?? []).not.toContain("Anime Tosho");
+    expect(names).not.toContain("the season map");
   }, 15000);
 
   it("reads a file's name as the player wrote it: a plus, an ampersand and a percent sign stay in it", async () => {

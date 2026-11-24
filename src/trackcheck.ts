@@ -12,6 +12,10 @@
  * voices clearly more often than chance, while the other doesn't, is the one served. What was heard
  * is kept with the file, so every other subtitle for it is judged by the same audio with nothing
  * more read.
+ *
+ * A subtitle that fits nothing in the track is timed by the voices instead. Where the voices that
+ * timed it also show the track to be off them (trackOffVoices), the track's lines don't refine that
+ * timing, and a subtitle that fits the track doesn't take its place.
  */
 import type { Cue } from "./sync.js";
 
@@ -33,7 +37,9 @@ export const TRACK_CHECK = {
   minMet: 8,
   overChance: 2.5,
   /** And how many times the other timing's count. */
-  overOther: 2
+  overOther: 2,
+  /** The least of a track's lines inside the stretches heard for it to be judged off the voices (trackOffVoices). */
+  trackLines: 30
 };
 
 export interface VoiceSpot {
@@ -111,30 +117,79 @@ export interface VoicesSaid {
  * 28 either way. Heard for 15 s a stretch, the first gave 6 of 18 and 2 of 19: too few to rest on.
  */
 export function voicesSay(came: number[], shift: (start: number) => number, spots: VoiceSpot[]): VoicesSaid {
-  const edge = 300;
-  const heardMs = spots.reduce((n, s) => n + Math.max(0, s.to - s.from - 2 * edge), 0);
-  const voices = spots.map((s) => onsets(s.speech).filter((v) => v >= s.from && v < s.to));
-  const voiceCount = voices.reduce((n, v) => n + v.length, 0);
-  const chance = heardMs > 0 ? Math.min(1, (voiceCount * 2 * TRACK_CHECK.meetMs) / heardMs) : 1;
-  const tally = (starts: number[]) => {
-    let met = 0;
-    let lines = 0;
-    for (const start of starts) {
-      const at = start + TRACK_CHECK.leadMs;
-      const i = spots.findIndex((s) => at >= s.from + edge && at <= s.to - edge);
-      if (i < 0) continue;
-      lines++;
-      if (voices[i].some((v) => Math.abs(v - at) <= TRACK_CHECK.meetMs)) met++;
-    }
-    return { met, lines };
-  };
+  const { voices, chance } = heardVoices(spots);
+  const tally = (starts: number[]) => onVoices(starts, spots, voices);
   const moved = came.filter((start) => Math.abs(shift(start)) >= TRACK_CHECK.movedMs);
   const asCame = tally(moved);
   const asServed = tally(moved.map((start) => start + shift(start)));
-  const clear = (mine: { met: number; lines: number }, other: { met: number }) =>
-    mine.met >= TRACK_CHECK.minMet && mine.met >= TRACK_CHECK.overChance * chance * mine.lines && mine.met >= TRACK_CHECK.overOther * other.met;
+  const clear = (mine: { met: number; lines: number }, other: { met: number }) => onTheVoices(mine, chance) && mine.met >= TRACK_CHECK.overOther * other.met;
   const cameClear = clear(asCame, asServed);
   const servedClear = clear(asServed, asCame);
   const verdict = cameClear && !servedClear ? ("as it came" as const) : servedClear && !cameClear ? ("the track" as const) : undefined;
   return { ...(verdict ? { verdict } : {}), came: asCame, served: asServed, chance };
+}
+
+export interface TrackOff {
+  /** The file's own track is off the voices heard, and the subtitle as they time it is on them. */
+  off: boolean;
+  /** Line starts on a voice, and the lines counted, for the subtitle and for the track. */
+  subtitle: { met: number; lines: number };
+  track: { met: number; lines: number };
+  /** The share of lines that would meet a voice by chance, from how many voices were heard. */
+  chance: number;
+}
+
+/**
+ * Whether the voices heard put a subtitle on them and the file's own subtitle track off them.
+ * `placed`: the subtitle's line starts as the voices time it; `track`: the track's line starts; both
+ * in file time, counted where they fall inside a stretch heard.
+ *
+ * The subtitle is on the voices as in voicesSay (TRACK_CHECK.minMet line starts on a voice, and
+ * TRACK_CHECK.overChance times chance). The track is off them when, over at least
+ * TRACK_CHECK.trackLines of its lines, it meets a voice no more often than chance: a track taken
+ * from another cut lands where the voices fall at random. A track made for another language's audio
+ * (the original's timing, a dub's voices heard) still meets them more often than chance, so it is
+ * never judged off.
+ *
+ * Calibration (86 stored files with a track and audio heard, 2 to 5 stretches each): the three tracks
+ * off their voices met a voice 0.2 to 0.7 times what chance gives; every other track 1.1 times or
+ * more, the lowest two timed to the original audio with a dub's voices heard. On one of the three, the
+ * subtitle the voices timed met a voice with 30 of 60 lines (5.6 times chance), the track 1 of 73.
+ */
+export function trackOffVoices(placed: number[], track: number[], spots: VoiceSpot[]): TrackOff {
+  const { voices, chance } = heardVoices(spots);
+  const subtitle = onVoices(placed, spots, voices);
+  const own = onVoices(track, spots, voices);
+  const off = onTheVoices(subtitle, chance) && own.lines >= TRACK_CHECK.trackLines && own.met <= chance * own.lines;
+  return { off, subtitle, track: own, chance };
+}
+
+/** Stretches heard keep this far from their edges, where a voice may have started before the stretch. */
+const EDGE_MS = 300;
+
+/** Where voices start in each stretch heard, and the share of line starts that meet one by chance. */
+function heardVoices(spots: VoiceSpot[]): { voices: number[][]; chance: number } {
+  const heardMs = spots.reduce((n, s) => n + Math.max(0, s.to - s.from - 2 * EDGE_MS), 0);
+  const voices = spots.map((s) => onsets(s.speech).filter((v) => v >= s.from && v < s.to));
+  const voiceCount = voices.reduce((n, v) => n + v.length, 0);
+  return { voices, chance: heardMs > 0 ? Math.min(1, (voiceCount * 2 * TRACK_CHECK.meetMs) / heardMs) : 1 };
+}
+
+/** Of these line starts, those inside a stretch heard, and how many of them meet a voice starting. */
+function onVoices(starts: number[], spots: VoiceSpot[], voices: number[][]): { met: number; lines: number } {
+  let met = 0;
+  let lines = 0;
+  for (const start of starts) {
+    const at = start + TRACK_CHECK.leadMs;
+    const i = spots.findIndex((s) => at >= s.from + EDGE_MS && at <= s.to - EDGE_MS);
+    if (i < 0) continue;
+    lines++;
+    if (voices[i].some((v) => Math.abs(v - at) <= TRACK_CHECK.meetMs)) met++;
+  }
+  return { met, lines };
+}
+
+/** Enough line starts on a voice, far enough over chance, for a timing to count as on the voices. */
+function onTheVoices(counted: { met: number; lines: number }, chance: number): boolean {
+  return counted.met >= TRACK_CHECK.minMet && counted.met >= TRACK_CHECK.overChance * chance * counted.lines;
 }

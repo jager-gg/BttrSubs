@@ -239,10 +239,12 @@ export function trackLabel(code: string | undefined, synced: boolean | "pending"
 /**
  * Whether a sync result is good enough to serve or list as synced: anchors found, and not timed by
  * speech alone unless the file has no subtitle track (then speech is all there is, and no alternate
- * can do better). Every place that weighs a subtitle against its fallbacks asks this one question.
+ * can do better) or its track is off the voices that timed it (overTrack: an alternate that fits
+ * the track would be off them too). Every place that weighs a subtitle against its fallbacks asks
+ * this one question.
  */
 export function syncedWell(result: SyncResult | undefined | "late" | "wait" | "misfit" | { alternate: Alternate }): result is SyncResult {
-  return typeof result === "object" && "anchors" in result && result.anchors.length > 0 && (!result.bySpeech || result.speechOnly === true);
+  return typeof result === "object" && "anchors" in result && result.anchors.length > 0 && (!result.bySpeech || result.speechOnly === true || result.overTrack === true);
 }
 
 /**
@@ -752,7 +754,11 @@ function addonRoutes(): express.Router {
       stremioRequest.type === "series" && stremioRequest.episode !== undefined
         ? (async () => {
             const meta = kitsuId ? undefined : await metaOf("series", imdbId);
-            if (!kitsuId && !isAnime(meta)) return undefined;
+            // Only anime has one: for any other show nothing is asked, and the list doesn't show it as asked.
+            if (!kitsuId && !isAnime(meta)) {
+              notAsked.add("the season map");
+              return undefined;
+            }
             return seasonMap(imdbId, async () => meta?.name ?? (await titleOf("series", imdbId))?.name);
           })().catch(() => undefined)
         : Promise.resolve(undefined);
@@ -1279,7 +1285,7 @@ function addonRoutes(): express.Router {
         if (!track.alts.length) continue;
         const own = await knownSync(syncKey(refOf(track.subtitle), track.season, track.episode, playing.filename, track.subtitle.pick), playing.filename);
         // Timed only by speech (the last resort) counts as not fitting here: an alternate that fits the
-        // file's subtitles is better.
+        // file's subtitles is better. Not where the voices show those subtitles to be off them ("voices").
         if (own !== "wrong" && own !== "unsynced" && own !== "speech") continue;
         // A file with no subtitle track: speech is all there is. Timed by it, the top one stays; not
         // timed, an alternate that speech does time takes its place.
@@ -1297,7 +1303,7 @@ function addonRoutes(): express.Router {
             const result = await Promise.race([job, new Promise<"late">((resolve) => setTimeout(() => resolve("late"), Math.max(0, deadline + HEADER_GRACE_MS - Date.now())).unref())]);
             if (syncedWell(result)) state = "synced";
           }
-          if (state !== "synced" && !(speechOnly && state === "speech")) continue;
+          if (state !== "synced" && state !== "voices" && !(speechOnly && state === "speech")) continue;
           track.alts = track.alts.filter((a) => a !== alt);
           Object.assign(track, { subtitle: alt, season: s, episode: e });
           count("tracks.fallback");
@@ -1349,7 +1355,7 @@ function addonRoutes(): express.Router {
           // Timed by speech counts only on a file with no subtitle track, where speech is all there is.
           if (syncedWell(result)) state = "synced";
         }
-        fits = state === "synced" || (state === "speech" && fileHas === "speech");
+        fits = state === "synced" || state === "voices" || (state === "speech" && fileHas === "speech");
       }
       if (fits) continue;
       count("tracks.subtitlecatHeld");
@@ -1387,14 +1393,14 @@ function addonRoutes(): express.Router {
     const synced = (t: (typeof tracks)[number]) => Boolean(playing) && !unsynced.has(t.subtitle);
     // Known to be timed to this file, as against a sync still to finish (or to start with the download):
     // only these say "Synced" and count as synced.
-    const timed = new Set(tracks.filter((_, i) => known[i] === "synced" || known[i] === "speech").map((t) => t.subtitle));
+    const timed = new Set(tracks.filter((_, i) => known[i] === "synced" || known[i] === "speech" || known[i] === "voices").map((t) => t.subtitle));
     const confirmed = (t: (typeof tracks)[number]) => synced(t) && timed.has(t.subtitle);
     // Timed by speech in the audio (the file has no subtitle track, or nothing else fit): labelled
     // apart, so it's easy to spot and report.
     const audioOf = new Map<RankedSubtitle, "synced" | "trying">();
     tracks.forEach((t, i) => {
       if (!synced(t)) return;
-      if (known[i] === "speech") audioOf.set(t.subtitle, "synced");
+      if (known[i] === "speech" || known[i] === "voices") audioOf.set(t.subtitle, "synced");
       else if (fileHas === "speech" && known[i] === "unknown") audioOf.set(t.subtitle, "trying");
     });
     console.log(`${who} subtitles ${stremioRequest.id} file=${stremioRequest.filename ?? "-"} results=${ranked.length}${ranked[0] ? `(${closedCaptions ? "cc:" : ""}${refOf(ranked[0])}${ranked[0].hashMatch ? " hash" : ""})` : ""} extra=${extras.map((e) => `${e.lang}:${refOf(e.subtitle)}(${tierName((e.subtitle.quality ?? 1) as QualityTier)}${e.subtitle.releaseMatch ? ` match ${e.subtitle.releaseMatch}` : ""}${e.subtitle.hashMatch ? " hash" : ""})`).join(",") || "none"} sync=${playing ? (unsynced.size ? `on, ${unsynced.size} known unsynced` : "on") : "off"} hints=${stremioRequest.videoHash ? "hash" : ownHash ? "own hash" : "-"},${stremioRequest.videoSize ? "size" : "-"}`);
@@ -1416,6 +1422,8 @@ function addonRoutes(): express.Router {
             const [s, e] = place(alt);
             const result = await unlessMisfit(syncOne(alt, s, e, track.code).catch(() => undefined), syncKey(refOf(alt), s, e, playing.filename, alt.pick), BACKGROUND_SYNC_WAIT_MS);
             if (syncedWell(result)) {
+              // Its speech read may yet show the track to be off the voices (overTrack): then it stays.
+              if (syncedWell(await own.catch(() => undefined))) return;
               console.log(`${who} ${stremioRequest.id}: ${refOf(track.subtitle)} doesn't sync to this file; fallback ${refOf(alt)}${alt.packEpisode !== undefined ? ` (its pack's episode ${alt.packEpisode})` : ""} does`);
               return;
             }

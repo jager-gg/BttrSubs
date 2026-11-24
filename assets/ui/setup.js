@@ -74,7 +74,7 @@
     ["allowMachine", "Machine and AI translations", "On: they can be picked too. Off leaves them out completely."],
     ["hideUnsynced", "Only subtitles that sync", "On: a subtitle that can't be synced to your file is left out, instead of listed as not synced. When the file itself can't be read, nothing is listed."],
     ["keepAss", "Keep the subtitle's own styling", "Some subtitles carry their own fonts, colours and positions. On: they keep them, once the subtitle has been fetched. Off: they are sent as plain text, unless a style below, Signs & songs or your file's style applies."],
-    ["dropSounds", "Remove sound descriptions", "On: [door creaks], (laughs), sung ♪ lines and speaker names like JOHN: are taken out of the text. The timing stays the same."],
+    ["dropSounds", "Remove sound descriptions", "On: [door creaks], (laughs), sung ♪ lines and speaker names like JOHN: are taken out of the text, and Mary: too in captions that name every speaker. The timing stays the same."],
     ["signs", "Signs & songs with English Dub", "Anime only, and only with English Dub picked. On: the on-screen text and song lines a fan release typesets are shown with English Dub, timed to your file. They come from Anime Tosho, also when that source is off. Your player needs to show ASS subtitles."],
     ["ownStyle", "Use your file's subtitle style", "On: every subtitle takes the font, size and colours of the subtitles inside your file, when it has styled ones, in place of your style's look below and of the upload's own styling. A font without the letters of a language falls back to your player's own. Off: the plain look, or your style below."]
   ];

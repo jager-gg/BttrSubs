@@ -2,6 +2,13 @@
 
 Each version is a tag (`v1.0.0`) with an image on GitHub's registry (`ghcr.io/jager-gg/bttrsubs:1.0.0`, `:1.0`, `:1` and `:latest`). Versions follow [semantic versioning](https://semver.org): a major version can need a step when upgrading, and its section says which.
 
+## [1.2.1]
+
+Fixed: subtitles timed by the audio on a file whose own subtitle track is far off its voices, and Remove sound descriptions in captions that name every speaker. Nothing to do when upgrading: subtitles are timed again the next time they are played.
+
+- **A file whose own subtitle track is far off its voices:** a subtitle timed by the audio there keeps that timing. It was then pulled toward the file's own lines, up to 0.9 s a line, and in the list a subtitle that fit those lines (and so was off the voices with them) could take its place.
+- **Remove sound descriptions in captions that name every speaker** ("Mary: …", "Guard #2: …"): those names go too, and so do the sounds in parentheses at the start or end of a speaker's line. Every other subtitle is cleaned as before.
+
 ## [1.2.0]
 
 New: two more places to find anime subtitles, and a bigger Style step. Fixed: a subtitle that holds two episodes. Nothing to do when upgrading. A configuration saved with the new style options doesn't open in 1.1.0, so going back means making it again.
