@@ -772,7 +772,9 @@ export function filterAndRankDubtitles(
     // From a source that searched for this episode, a name giving season 1 (or 0) and this episode's
     // number is taken: an anime sequel is often released as its own "S01". But it may also be the
     // first season's episode filed under this one, so a name that spells out this season wins over it.
-    const otherSeason = subtitle.episodeTrusted === true && request.type === "series" && (request.season ?? 0) > 1 && namesOnlyAnotherSeason((subtitle.releaseInfo ?? []).join(" "), request);
+    // The same for season 1: a name that only gives season 0 is a special's, filed under the episode of
+    // its number, and comes after a name that gives season 1.
+    const otherSeason = subtitle.episodeTrusted === true && request.type === "series" && (request.season ?? 0) >= 1 && namesOnlyAnotherSeason((subtitle.releaseInfo ?? []).join(" "), request);
 
     if (hearingImpaired === "exclude" && subtitle.hearingImpaired === true) return [];
     if (hearingImpaired === "only" && subtitle.hearingImpaired !== true) return [];

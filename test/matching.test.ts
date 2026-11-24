@@ -203,6 +203,16 @@ describe("a name giving another season, from a source that searched for this epi
     expect(filterAndRankDubtitles([seasonOne], episodeOf(3, 5, 29), { requireDub: false }).map((s) => s.subtitleId)).toEqual([1]);
   });
 
+  it("puts a special's name (season 0) after the episode's own for a season 1 episode, however popular the special's is", () => {
+    const special = trusted(5, "Show - S00E01", { downloads: 900 });
+    const episode = trusted(6, "Show - S01E01");
+    const ranked = filterAndRankDubtitles([special, episode], episodeOf(1, 1, 1), { requireDub: false });
+    expect(ranked.map((s) => s.subtitleId)).toEqual([6, 5]);
+    expect(ranked[1].otherSeason).toBe(true);
+    // Alone, the special's is still taken: nothing better is known.
+    expect(filterAndRankDubtitles([special], episodeOf(1, 1, 1), { requireDub: false }).map((s) => s.subtitleId)).toEqual([5]);
+  });
+
   it("isn't marked when it counts the episode across the show, or when season 1 is the one asked for", () => {
     const counted = trusted(3, "Show.S01E29.1080p.WEB");
     expect(filterAndRankDubtitles([counted], episodeOf(3, 5, 29), { requireDub: false })[0].otherSeason).toBeUndefined();

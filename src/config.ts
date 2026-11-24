@@ -120,7 +120,7 @@ export const fromEnv = {
 };
 
 /** Which of the settings that never change live are set in .env: true or false, never their values. */
-export const ENV_ONLY = ["CONFIG_SECRET", "ADMIN_PASSWORD", "PUBLIC_BASE_URL", "CACHE_DIR", "PORT"] as const;
+export const ENV_ONLY = ["CONFIG_SECRET", "ADMIN_PASSWORD", "PUBLIC_BASE_URL", "CACHE_DIR", "CAPTIONS_DIR", "PORT"] as const;
 export function envIsSet(name: (typeof ENV_ONLY)[number]): boolean {
   return Boolean(env[name]);
 }

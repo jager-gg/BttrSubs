@@ -1,6 +1,6 @@
 /*
- * Setup (/configure for a new configuration, /<token>/configure to change one): an intro, five steps (Sync,
- * Sources, Languages, Filters, then Name and create), a review and the install URL. The server checks each
+ * Setup (/configure for a new configuration, /<token>/configure to change one): an intro, six steps (Sync,
+ * Sources, Languages, Filters, Style, then Name and create), a review and the install URL. The server checks each
  * step as it's left (<page>/check) and makes or saves the configuration (a POST to the page's own address).
  *
  * Saved keys and the AIOStreams URL never come back to this page (window.BTTR_SETUP says only that they're
@@ -63,18 +63,20 @@
     ["opensubtitles", "OpenSubtitles", "The biggest library."],
     ["thesubtitledb", "TheSubtitleDB", "Films and series in many languages."],
     ["gestdown", "Gestdown", "Addic7ed's TV subtitles. Series only."],
-    ["animetosho", "Anime Tosho", "English Dub captions from anime releases' own tracks, when the sites have none. Anime only."],
+    ["animetosho", "Anime Tosho", "English Dub captions from anime releases' own tracks, when the sites have none. Anime only, and only with English Dub picked."],
+    ["tsukihime", "TsukiHime", "The subtitle tracks anime releases carry, in every language you pick, and the dub's captions where a release has them. Anime only."],
+    ["aninzb", "aninzb", "The same, from recent anime releases on usenet. Anime only."],
     ["subtitlecat", "Subtitle Cat", "Fan translations and other uploads the sites lack. Listed only once synced to your file; works beside at least one other source."]
   ];
   // Filters' switches, the one on by default first; Style's switch has a step of its own.
   const FILTERS = [
-    ["skipEmbedded", "Skip languages the file already has", "On: a language the video already has full subtitles in is left out. English Dub always stays."],
+    ["skipEmbedded", "Skip languages the file already has", "On: a language the video already has full subtitles in is left out. English Dub always stays, except on a title made in English: there it is regular English, left out like any other when the video has English."],
     ["allowMachine", "Machine and AI translations", "On: they can be picked too. Off leaves them out completely."],
-    ["hideUnsynced", "Only subtitles that sync", "On: a subtitle that can't be synced to your file is left out, instead of listed as not synced."],
-    ["keepAss", "Keep the subtitle's own styling", "Some subtitles carry their own fonts, colours and positions. On: they keep them. Off: every subtitle is sent as plain text."],
+    ["hideUnsynced", "Only subtitles that sync", "On: a subtitle that can't be synced to your file is left out, instead of listed as not synced. When the file itself can't be read, nothing is listed."],
+    ["keepAss", "Keep the subtitle's own styling", "Some subtitles carry their own fonts, colours and positions. On: they keep them, once the subtitle has been fetched. Off: they are sent as plain text, unless a style below, Signs & songs or your file's style applies."],
     ["dropSounds", "Remove sound descriptions", "On: [door creaks], (laughs), sung ♪ lines and speaker names like JOHN: are taken out of the text. The timing stays the same."],
-    ["signs", "Signs & songs with English Dub", "Anime only. On: the on-screen text and song lines a fan release typesets are shown with English Dub, timed to your file. Your player needs to show ASS subtitles."],
-    ["ownStyle", "Use your file's subtitle style", "On: English Dub and English take the font, size and colours of the subtitles inside your file, when it has styled ones. Off: the plain look, or your style below."]
+    ["signs", "Signs & songs with English Dub", "Anime only, and only with English Dub picked. On: the on-screen text and song lines a fan release typesets are shown with English Dub, timed to your file. They come from Anime Tosho, also when that source is off. Your player needs to show ASS subtitles."],
+    ["ownStyle", "Use your file's subtitle style", "On: every subtitle takes the font, size and colours of the subtitles inside your file, when it has styled ones, in place of your style's look below and of the upload's own styling. A font without the letters of a language falls back to your player's own. Off: the plain look, or your style below."]
   ];
   const STYLE = new Set(["keepAss", "dropSounds", "signs", "ownStyle"]);
   const HI = { include: "Hearing-impaired included", exclude: "No hearing-impaired", only: "Hearing-impaired only" };
@@ -98,10 +100,12 @@
     flt: Object.fromEntries(FILTERS.map(([k]) => [k, C ? C[k] : k === "skipEmbedded" || k === "keepAss"])),
     hi: C?.hearingImpaired ?? "include",
     // Subtitles a language lists: the configuration's, never more than this server allows.
-    per: Math.min(C?.perLanguage ?? 1, S.limits.perLanguageMax),
+    per: C?.perLanguage ?? 1,
     // The styles as they stand, edited in place, and the one being added.
     styles: (C?.styles ?? []).map((r) => ({ ...r })),
-    addStyle: { scope: "all", id: "", look: "", up: String(S.limits.usualUp), changes: {} },
+    addStyle: { scope: "all", id: "", lang: "", look: "", up: String(S.limits.usualUp), changes: {} },
+    // The preview's own picture and line: never saved with the configuration.
+    preview: { scene: "dark", text: "" },
     name: C?.label ?? "",
     url: "", inPlace: false, sent: "",
     // Whether the saved configuration can be added to AIOStreams from here, and how that went ("" until tried).
@@ -117,7 +121,7 @@
   const DRAFT = `bttr-setup:${location.pathname}`;
   // A half-filled Add a style isn't kept: it starts afresh, at the usual height, on every visit. A test is asked again.
   const save = () => {
-    const { subsource: _s, subdl: _d, wyzie: _w, aioPw: _p, addStyle: _a, test: _t, ...kept } = st;
+    const { subsource: _s, subdl: _d, wyzie: _w, aioPw: _p, addStyle: _a, preview: _v, test: _t, ...kept } = st;
     try { sessionStorage.setItem(DRAFT, JSON.stringify(kept)); } catch {}
   };
   try {
@@ -155,14 +159,23 @@
   const pastedAddons = () => new Set(st.addons.split(/\s+/).filter(Boolean).map((u) => u.replace(/^stremio:\/\//i, "https://")));
   const addonCount = () => (C?.addons ?? []).filter((_, i) => !st.removeAddons.includes(i)).length + pastedAddons().size;
   const sourceCount = () => SOURCES.filter(([k]) => st.src[k]).length + (present("subsource") ? 1 : 0) + (present("subdl") ? 1 : 0) + (present("wyzie") ? 1 : 0) + addonCount();
-  const langList = () => [...st.langs, ...st.other.split(",").map((s) => s.trim()).filter(Boolean)];
+  // A name typed under Other languages that has a chip is that chip, by the chip's own wording first:
+  // "English" typed there is the regular English, as the chip of that name is, not English Dub.
+  const chipFor = (typed) => {
+    const t = typed.toLowerCase();
+    return (LANGS.find(([, label]) => label.toLowerCase() === t) ?? LANGS.find(([value]) => value.toLowerCase() === t))?.[0];
+  };
+  const langList = () => [...new Set([...st.langs, ...st.other.split(",").map((s) => s.trim()).filter(Boolean).map((s) => chipFor(s) ?? s)])];
   const andList = (xs) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`);
   // Where a style applies, and what the preview draws of a look.
-  const WHERE = { all: "All subtitles", anime: "Anime", series: "Shows", movie: "Films", show: "One show" };
-  const whereOf = (r) => (r.scope === "show" ? r.name ?? r.id : WHERE[r.scope]);
+  const WHERE = { all: "All subtitles", anime: "Anime", series: "Series", movie: "Films", show: "One title" };
+  const whereOf = (r) => `${r.scope === "show" ? r.name ?? r.id : WHERE[r.scope]}${r.lang ? ` · ${shownLang(r.lang)}` : ""}`;
   // A look as links carry it: a preset's id, or a preset ("plain" for none) and its changes, each a letter
   // and its value joined by "_" ("yellow_o0000ff_w2.4"; srt.ts lookOf). The page keeps preset and changes apart.
-  const CHANGES = ["c", "o", "w", "h", "f", "z", "b", "x"];
+  const CHANGES = ["c", "o", "w", "h", "f", "g", "z", "b", "x", "i", "s", "k", "t", "n"];
+  // A font typed by name, as a look carries it: a + for each space.
+  const FONT_NAME = new RegExp(S.fontName);
+  const fontSpec = (typed) => typed.trim().replace(/\s+/g, "+");
   const parseLook = (spec) => {
     const [base, ...parts] = String(spec ?? "").split("_");
     return { base: base === "plain" ? "" : base, changes: Object.fromEntries(parts.map((p) => [p[0], p.slice(1)])) };
@@ -173,7 +186,7 @@
   };
   const presetOf = (base) => S.looks.find((l) => l.id === base) ?? S.plainLook;
   // A preset's own value for each change, as the change writes it: a value it has already is no change.
-  const presetValues = (p) => ({ c: p.colour.slice(1).toLowerCase(), o: p.outlineColour.slice(1).toLowerCase(), w: String(p.outline), h: String(p.shadow), f: S.fonts.find((f) => f.name === p.font)?.id, z: "100", b: p.bold ? "1" : "0", x: p.box ? "1" : "0" });
+  const presetValues = (p) => ({ c: p.colour.slice(1).toLowerCase(), o: p.outlineColour.slice(1).toLowerCase(), w: String(p.outline), h: String(p.shadow), f: S.fonts.find((f) => f.name === p.font)?.id, z: "100", b: p.bold ? "1" : "0", x: p.box ? "1" : "0", i: p.italic ? "1" : "0", s: String(p.spacing), k: String(S.changeLimits.boxUsual), t: p.top ? "1" : "0" });
   // The look drawn: its preset with the changes on top.
   const drawnLook = (spec) => {
     const { base, changes: c } = parseLook(spec);
@@ -184,9 +197,14 @@
     if (c.w !== undefined) l.outline = Number(c.w);
     if (c.h !== undefined) l.shadow = Number(c.h);
     if (c.f) l.font = S.fonts.find((f) => f.id === c.f)?.name ?? l.font;
+    if (c.g) l.font = c.g.replace(/\+/g, " ");
     if (c.z) l.size = Math.round(p.size * Number(c.z)) / 100;
     if (c.b !== undefined) l.bold = c.b === "1";
     if (c.x !== undefined) l.box = c.x === "1";
+    if (c.i !== undefined) l.italic = c.i === "1";
+    if (c.s !== undefined) l.spacing = Number(c.s);
+    l.boxSolid = c.k !== undefined ? Number(c.k) : S.changeLimits.boxUsual;
+    if (c.t !== undefined) l.top = c.t === "1";
     return l;
   };
   // Where a look's lines sit unmoved: its preset's own height, else the usual.
@@ -200,38 +218,54 @@
   // The preview is a small picture: the line sits `up`% of its height from the bottom, at the size and outline the
   // subtitle script gives it (a script 288 high), so a look and a height read as they will in a player.
   // An outline as wide as the script's: a stroke drawn under the letters, half of it showing.
-  const lookCss = (spec, up) => {
+  const lookCss = (spec, up, zoom = 1) => {
     const l = drawnLook(spec);
     const at = goodPct(up) ? Number(up) : usualFor(spec);
-    const cq = (px) => `${((px / 288) * 100).toFixed(2)}cqh`;
+    const cq = (px) => `${(((px * zoom) / 288) * 100).toFixed(2)}cqh`;
+    const across = "left:50%;right:auto;translate:-50% 0;text-align:center;";
+    const where = zoom > 1 ? "left:50%;right:auto;top:50%;bottom:auto;translate:-50% -50%;" : `${l.top ? `top:${at}%;bottom:auto;` : `bottom:${at}%;top:auto;`}${across}`;
     const rgb = (hex, a) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(" ")} / ${a})`;
-    const text = `bottom:${at}%;font-family:"${l.font}",Arial,sans-serif;color:${l.colour};font-weight:${l.bold ? 700 : 500};font-size:${cq(l.size)};`;
-    if (l.box) return `${text}background:${rgb(l.outlineColour, 0.5)};padding:${cq(l.outline)} calc(2 * ${cq(l.outline)});-webkit-text-stroke:0;text-shadow:none`;
+    const text = `${where}font-family:"${l.font}",Arial,sans-serif;color:${l.colour};font-weight:${l.bold ? 700 : 500};font-style:${l.italic ? "italic" : "normal"};letter-spacing:${cq(l.spacing ?? 0)};font-size:${cq(l.size)};`;
+    if (l.box) return `${text}background:${rgb(l.outlineColour, (l.boxSolid ?? 50) / 100)};padding:${cq(l.outline)} calc(2 * ${cq(l.outline)});-webkit-text-stroke:0;text-shadow:none`;
     const shadow = l.shadow > 0 ? `${cq(l.shadow)} ${cq(l.shadow)} 0 rgb(0 0 0 / ${l.shadowOpacity})` : "none";
     return `${text}-webkit-text-stroke:${cq(2 * l.outline)} ${l.outlineColour};paint-order:stroke fill;text-shadow:${shadow}`;
   };
 
   // The style being added: its place has a style already (Add replaces it, so the button says Save).
   const showIdOf = (typed) => (String(typed).match(/tt\d{5,10}/) ?? [""])[0];
-  const placeTaken = (a) => st.styles.some((r) => r.scope === a.scope && (r.id ?? "") === (a.scope === "show" ? showIdOf(a.id) : ""));
+  const placeTaken = (a) => st.styles.some((r) => r.scope === a.scope && (r.id ?? "") === (a.scope === "show" ? showIdOf(a.id) : "") && (r.lang ?? "") === (a.lang ?? ""));
   const changedNote = (n) => (n ? `${n} changed` : "");
   // The changes to the chosen look: colours, font, size, outline, shadow, bold and a box, each starting at the look's own.
   const changesPanel = (a) => {
     const d = drawnLook(specOf(a.look, a.changes));
     const L = S.changeLimits;
-    const range = (k, label, min, max, step, value, unit = "") =>
-      `<label class="change"><span>${label} <output data-out="${k}">${value}${unit}</output></span><input type="range" data-change="${k}" min="${min}" max="${max}" step="${step}" value="${value}"></label>`;
+    const range = (k, label, min, max, step, value, unit = "", off = false) =>
+      `<label class="change"><span>${label} <output data-out="${k}">${value}${unit}</output></span><input type="range" data-change="${k}" min="${min}" max="${max}" step="${step}" value="${value}"${off ? " disabled" : ""}></label>`;
+    const flag = (k, label, on) => `<label class="switch-row"><input class="switch" type="checkbox" role="switch" data-change="${k}"${on ? " checked" : ""}>${label}</label>`;
+    // A choice of a few: one pressed, each a button (a change like the others, by its letter).
+    const seg = (k, label, options, chosen) =>
+      `<div class="change"><span id="l-seg-${k}">${label}</span><div class="seg small" role="radiogroup" aria-labelledby="l-seg-${k}">${options.map(([v, t]) => `<button type="button" role="radio" data-seg-change="${k}" data-value="${v}" aria-checked="${v === chosen}" aria-pressed="${v === chosen}">${t}</button>`).join("")}</div></div>`;
+    const group = (title, body) => `<fieldset class="change-group"><legend>${title}</legend><div class="change-grid">${body}</div></fieldset>`;
     return (
-      `<details class="style-changes"${a.open ? " open" : ""}><summary>${icon("sliders")}Colours, outline, font and size<span class="changes-count" data-changes-count>${changedNote(Object.keys(a.changes).length)}</span></summary><div class="change-grid">` +
-      `<label class="change change-colour"><span>Text colour</span><input type="color" class="colour" data-change="c" value="${d.colour.toLowerCase()}"></label>` +
-      `<label class="change change-colour"><span data-outline-label>${d.box ? "Box colour" : "Outline colour"}</span><input type="color" class="colour" data-change="o" value="${d.outlineColour.toLowerCase()}"></label>` +
-      `<label class="change"><span>Font</span><select class="select" data-change="f">${S.fonts.map((f) => `<option value="${f.id}"${f.name === d.font ? " selected" : ""}>${esc(f.name)}</option>`).join("")}</select></label>` +
-      range("z", "Size", L.sizeMin, L.sizeMax, 5, a.changes.z ?? "100", "%") +
-      range("w", "Outline", 0, L.outlineMax, 0.2, d.outline) +
-      range("h", "Shadow", 0, L.shadowMax, 0.2, d.shadow) +
-      `<label class="switch-row"><input class="switch" type="checkbox" role="switch" data-change="b"${d.bold ? " checked" : ""}>Bold</label>` +
-      `<label class="switch-row"><input class="switch" type="checkbox" role="switch" data-change="x"${d.box ? " checked" : ""}>Box behind the text</label>` +
-      `</div><button type="button" class="text-link" data-changes-clear${Object.keys(a.changes).length ? "" : " hidden"}>Clear the changes</button></details>`
+      `<details class="style-changes"${a.open === false ? "" : " open"}><summary>${icon("sliders")}Adjust the look<span class="changes-count" data-changes-count>${changedNote(Object.keys(a.changes).length)}</span><button type="button" class="changes-reset" data-changes-clear${Object.keys(a.changes).length ? "" : ' style="visibility:hidden"'}>Reset</button></summary>` +
+      group("Text",
+        `<label class="change change-colour"><span>Colour</span><input type="color" class="colour" data-change="c" value="${d.colour.toLowerCase()}"></label>` +
+        `<label class="change"><span>Font</span><select class="select" data-change="f">${S.fonts.map((f) => `<option value="${f.id}"${!a.changes.g && !a.otherFont && f.name === d.font ? " selected" : ""}>${esc(f.name)}</option>`).join("")}<option value="other"${a.changes.g || a.otherFont ? " selected" : ""}>Another font…</option></select></label>` +
+        `<label class="change"><span>Font name</span><input class="field" data-font-name maxlength="40" placeholder="e.g. Noto Sans" value="${esc((a.changes.g ?? "").replace(/\+/g, " "))}" spellcheck="false" autocomplete="off" aria-describedby="h-font-name"${a.changes.g || a.otherFont ? "" : " disabled"}><span class="change-note" id="h-font-name" data-font-note>For a font your player has. The preview shows it only if this device has it too.</span></label>` +
+        range("z", "Size", L.sizeMin, L.sizeMax, 5, a.changes.z ?? "100", `% of this look's (${d.size})`) +
+        range("s", "Letter spacing", 0, L.spacingMax, 0.5, d.spacing ?? 0) +
+        flag("b", "Bold", d.bold) +
+        flag("i", "Italic", d.italic)) +
+      group("Edge",
+        `<label class="change change-colour"><span data-outline-label>${d.box ? "Box colour" : "Outline colour"}</span><input type="color" class="colour" data-change="o" value="${d.outlineColour.toLowerCase()}"></label>` +
+        range("w", "Outline", 0, L.outlineMax, 0.2, d.outline) +
+        range("h", "Shadow", 0, L.shadowMax, 0.2, d.shadow) +
+        flag("x", "Box behind the text", d.box) +
+        range("k", "Box opacity", L.boxMin, L.boxMax, 10, d.boxSolid ?? L.boxUsual, "%", !d.box)) +
+      group("Place",
+        `<div class="change"><span id="l-style-up">Height from the edge</span>${stepper('id="c-style-up" aria-labelledby="l-style-up"', a.up, "How far from the edge, in percent", String(a.up).trim() !== "" && !goodPct(a.up), { unit: "%" })}</div>` +
+        seg("t", "Edge of the picture", [["0", "Bottom"], ["1", "Top"]], d.top ? "1" : "0")) +
+      `</details>`
     );
   };
 
@@ -255,9 +289,9 @@
     dropSounds: st.flt.dropSounds,
     signs: st.flt.signs,
     ownStyle: st.flt.ownStyle,
-    styles: st.styles.map((r) => ({ scope: r.scope, ...(r.id ? { id: r.id } : {}), look: r.look ?? "", up: r.up ?? "" })),
+    styles: st.styles.map((r) => ({ scope: r.scope, ...(r.id ? { id: r.id } : {}), ...(r.lang ? { lang: r.lang } : {}), look: r.look ?? "", up: r.up ?? "" })),
     hearingImpaired: st.hi,
-    perLanguage: Math.min(Number(st.per) || 1, S.limits.perLanguageMax),
+    perLanguage: Number(st.per) || 1,
     label: st.name.trim()
   });
 
@@ -286,7 +320,7 @@
     sync: () => (accountProblem(true) ? (S.saved.aio || address() || uuid() ? "Check your AIOStreams sign-in" : "Needs your AIOStreams sign-in") : st.test.result?.signIn === "ok" && st.test.mark === testMark() ? `Connected: ${host(address())}` : accountMark() === "" ? "Connected (saved)" : accountMark() === st.checkedAio ? `Connected: ${host(address())}` : `${host(address())}, checked on Next`),
     sources: () => `${sourceCount()} ${sourceCount() === 1 ? "source" : "sources"}${addonCount() ? ", addons included" : ""}`,
     languages: () => { const l = langList().map(shownLang); return l.length ? andList(l.slice(0, 3)) + (l.length > 3 ? ` +${l.length - 3}` : "") : "None picked"; },
-    filters: () => [st.flt.allowMachine ? "Machine translations allowed" : "No machine translations", HI[st.hi], st.flt.hideUnsynced ? "Synced only" : "", perOf() > 1 ? `${perOf()} per language` : ""].filter(Boolean).join(" · "),
+    filters: () => [st.flt.allowMachine ? "Machine translations allowed" : "No machine translations", HI[st.hi], st.flt.hideUnsynced ? "Synced only" : "", st.flt.skipEmbedded ? "" : "The file's languages listed too", perOf() > 1 ? `${perOf()} per language` : ""].filter(Boolean).join(" · "),
     style: () => [st.flt.keepAss ? "Own styling kept" : "Plain text", st.flt.dropSounds ? "No sound descriptions" : "", st.flt.signs ? "Signs & songs" : "", st.flt.ownStyle ? "File's style" : "", st.styles.length ? `${st.styles.length} ${st.styles.length === 1 ? "style" : "styles"}` : ""].filter(Boolean).join(" · "),
     finish: () => (st.url ? (st.inPlace ? "Saved" : "Created") : missingStep() ? `Waits for ${STEPS.find(([id]) => id === missingStep())[1]}` : editing ? "Ready to save" : "Ready to create")
   };
@@ -308,7 +342,7 @@
   const site = (address) => `<a class="out-link" href="https://${address}" target="_blank" rel="noopener">${address}${icon("ext")}<span class="sr-only"> (opens in a new tab)</span></a>`;
   // A logo drawn with no ground of its own sits on black, as its app shows it.
   const ON_BLACK = new Set(["stremio", "aiometadata"]);
-  const srcImg = (id) => `<img class="src-ic${ON_BLACK.has(id) ? " on-black" : ""}" src="/sources/${id}.png?v=2" alt="" width="24" height="24">`;
+  const srcImg = (id) => (`<img class="src-ic${ON_BLACK.has(id) ? " on-black" : ""}" src="/sources/${id}.png?v=2" alt="" width="24" height="24">`);
   const sw = (name, title, help, on, extra = "", lead = "") =>
     `<div class="set cfg-switch"><div class="set-label">${lead}<label class="lbl" for="c-${name}">${title}</label><p>${help}</p>${extra}</div><div class="set-control"><input class="switch" type="checkbox" id="c-${name}" data-flag="${name}"${on ? " checked" : ""} role="switch"></div></div>`;
   // `marks` sit beside the label, outside the <label>, so a button among them is a control of its own.
@@ -345,7 +379,7 @@
   const accountField = (k, label, type, ph, val, hint, extra = "") =>
     `<div class="acct-f"><label class="lbl" for="c-${k}">${label}</label><input class="field${type === "url" ? " mono" : ""}" id="c-${k}" data-field="${k}" type="${type}" placeholder="${esc(ph)}" value="${esc(val)}" spellcheck="false" autocomplete="off" aria-describedby="h-${k}"${extra}><p class="acct-hint" id="h-${k}">${hint}</p><p class="field-error" id="e-${k}" role="alert" hidden></p></div>`;
   const passwordHint = () =>
-    st.remove.aioPw ? `Forgotten when you ${editing ? "save" : "create"}. <button type="button" class="text-link" data-unremove="aioPw">Keep it</button>`
+    st.remove.aioPw ? `Forgotten when you ${editing ? "save" : "create"}: the AIOStreams app and a linked Stremio are no longer covered, and this page can't add the addon for you. <button type="button" class="text-link" data-unremove="aioPw">Keep it</button>`
       : S.saved.aioPw ? `Saved. <button type="button" class="text-link" data-remove="aioPw">Forget it</button>`
       : S.saved.aio ? "Not saved yet. It covers the AIOStreams app and a linked Stremio." : "";
   // AIOMetadata's URL shows once it is added, saved or typed.
@@ -465,7 +499,7 @@
     sync: () =>
       group("Your AIOStreams", `The password stays encrypted in your install URL ${phrase("and goes only to your AIOStreams.")}`) +
       `<div class="acct">` +
-      accountField("aioAddress", "Address", "url", "https://aiostreams.example.com", st.aioAddress, "No path after it") +
+      accountField("aioAddress", "Address", "url", "https://aiostreams.example.com", st.aioAddress, S.instanceGone && !st.aioAddress ? "The AIOStreams instance this configuration used is no longer accepted by this server. Enter one it accepts; until then nothing is listed." : "No path after it") +
       accountField("aioId", "UUID", "url", "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", st.aioId, menuPath("Save &amp; Install", "Your UUID")) +
       accountField("aioPw", "Password", "password", S.saved.aioPw ? "Type a new one to replace it" : "Your AIOStreams password", st.remove.aioPw ? "" : st.aioPw, passwordHint(), st.remove.aioPw ? " disabled" : "") +
       `</div><p class="acct-state" id="sign-state" role="status"></p>` +
@@ -478,7 +512,7 @@
       `<p class="cfg-aside"><button type="button" class="text-link" data-dialog>${icon("globe")}Which AIOStreams instances work?</button></p>`,
     sources: () =>
       group("Subtitle sites", "No key needed.") +
-      SOURCES.map(([k, n, h]) => sw(`src-${k}`, n, h, st.src[k], "", srcImg(k))).join("") +
+      SOURCES.map(([k, n, h]) => sw(`src-${k}`, n, h, st.src[k], k === "opensubtitles" && !S.openSubtitlesKey ? warning("opensubtitles", "On this server OpenSubtitles marks AI translations but not machine ones. Some can be picked even with <b>Machine and AI translations</b> off.") : "", srcImg(k))).join("") +
       `<p class="field-error" id="e-sources" role="alert" hidden></p>` +
       group("Sites that need a free key", "Your keys stay encrypted inside your install URL.") +
       keyField("subsource", "SubSource API key", "sk_…", `A free key is at ${site("subsource.net/api")}.`, "SubSource", RECOMMENDED) +
@@ -494,14 +528,14 @@
       field("other", "Other languages", "Comma-separated, e.g. Greek, Thai", "Any language not in the list above.", st.other),
     filters: () => {
       const flagRows = FILTERS.filter(([k]) => !STYLE.has(k)).map(([k, t, h]) => sw(k, t, h, st.flt[k])).join("");
-      const hiRow = `<div class="set"><div class="set-label"><span class="lbl" id="hi-l">Hearing-impaired subtitles</span><p>For the other languages: include them, leave them out, or use only them. Dub captions always describe sounds; Style can take those out.</p></div><div class="set-control"><div class="seg" role="radiogroup" aria-labelledby="hi-l">${["include", "exclude", "only"].map((v) => `<button type="button" role="radio" data-hi="${v}" aria-checked="${st.hi === v}" aria-pressed="${st.hi === v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join("")}</div></div></div>`;
+      const hiRow = `<div class="set"><div class="set-label"><span class="lbl" id="hi-l">Hearing-impaired subtitles</span><p>For the other languages: include them, leave them out, or use only them. Dub captions always describe sounds; Style can take those out. With Only and Remove sound descriptions both on, those subtitles are picked and their descriptions taken out.</p></div><div class="set-control"><div class="seg" role="radiogroup" aria-labelledby="hi-l">${["include", "exclude", "only"].map((v) => `<button type="button" role="radio" data-hi="${v}" aria-checked="${st.hi === v}" aria-pressed="${st.hi === v}">${v[0].toUpperCase() + v.slice(1)}</button>`).join("")}</div></div></div>`;
       // Subtitles per language: one setting for every language, English Dub included, within what this server allows.
       const max = S.limits.perLanguageMax;
       const perRow = `<div class="set"><div class="set-label"><label class="lbl" for="c-per">Subtitles per language</label><p id="h-per">Each language lists its best subtitle; the others still stand behind it and take its place when it can't be synced. More give you a choice when the first is poor, at a download and a timing pass each on every play.</p></div><div class="set-control">${
         max > 1
           ? stepper('id="c-per" aria-describedby="h-per"', perOf(), "Subtitles per language", false, { min: 1, max, unit: perOf() === 1 ? "subtitle" : "subtitles", down: "Fewer", up: "More" })
           : `<p class="per-fixed"><b>1</b> subtitle<span>Set by this server's owner.</span></p>`
-      }</div></div>`;
+      }${(Number(st.per) || 1) > max ? `<p class="per-note">You asked for ${Number(st.per)}; this server lists ${max} at most. Your ${Number(st.per)} is kept for when it lists more.</p>` : ""}</div></div>`;
       return flagRows + hiRow + perRow;
     },
     style: () => {
@@ -509,20 +543,21 @@
       const a = st.addStyle;
       const rows = st.styles.map((r, i) => `<li class="style-row"><span class="style-where"><b>${esc(whereOf(r))}</b>${r.scope === "show" ? `<span class="mono">${esc(r.id)}</span>` : ""}</span><select class="select" data-style-look="${i}" aria-label="${esc(whereOf(r))}: look">${lookOptions(r.look)}</select>${stepper(`data-style-up="${i}"`, r.up ?? usualFor(r.look), `${esc(whereOf(r))}: how far up, in percent`, r.up !== undefined && r.up !== "" && !goodPct(r.up))}<button type="button" class="icon-btn" data-style-edit="${i}" aria-label="Change the style for ${esc(whereOf(r))}" title="Change">${icon("sliders")}</button><button type="button" class="icon-btn" data-style-remove="${i}" aria-label="Remove the style for ${esc(whereOf(r))}">${icon("trash")}</button></li>`).join("");
       return flagRows +
-        `<h2 class="cfg-group">Styles</h2><p class="cfg-group-note">A look, a height, or both, for all subtitles or just anime, shows, films or one show. The most specific one wins.</p>` +
+        `<h2 class="cfg-group">Styles</h2><p class="cfg-group-note">A look, a height, or both, for all subtitles or just anime, series, films or one title, in every language or one. A style for the track's language comes first, then the most specific place.</p>` +
         (rows ? `<ul class="style-list">${rows}</ul>` : "") +
-        `<div class="set style-add"><div class="set-label"><label class="lbl" for="c-style-where">Add a style</label><p id="h-style-where">Subtitles usually sit ${S.limits.usualUp}% up; ${S.limits.raiseDefault}% clears most text on the picture's bottom.</p></div><div class="set-control">` +
-        `<div class="style-pick"><select class="select" id="c-style-where" aria-describedby="h-style-where">${Object.entries(WHERE).map(([k, l]) => `<option value="${k}"${k === a.scope ? " selected" : ""}>${l}</option>`).join("")}</select><input class="field mono" id="c-style-show" placeholder="IMDb link or tt…" value="${esc(a.id)}" spellcheck="false" autocomplete="off" aria-label="The show's IMDb link or id"${a.scope === "show" ? "" : " hidden"}></div>` +
-        `<div class="style-pick"><select class="select" id="c-style-look" aria-label="Look">${lookOptions(a.look, Object.keys(a.changes).length ? "Plain" : "Look unchanged")}</select>${stepper('id="c-style-up"', a.up, "How far up, in percent", String(a.up).trim() !== "" && !goodPct(a.up))}</div>` +
+        `<div class="set style-add"><div class="set-label"><label class="lbl" for="c-style-where">Add a style</label><p id="h-style-where">Subtitles usually sit ${S.limits.usualUp}% up; ${S.limits.raiseDefault}% clears most text on the picture's bottom.</p></div><div class="set-control style-editor">` +
+        `<div class="style-pick"><select class="select" id="c-style-where" aria-describedby="h-style-where">${Object.entries(WHERE).map(([k, l]) => `<option value="${k}"${k === a.scope ? " selected" : ""}>${l}</option>`).join("")}</select><input class="field mono" id="c-style-show" placeholder="IMDb link or tt…" value="${esc(a.id)}" spellcheck="false" autocomplete="off" aria-label="The title's IMDb link or id"${a.scope === "show" ? "" : " hidden"}><select class="select" id="c-style-lang" aria-label="Language"><option value="">Every language</option>${[...new Set([...langList(), ...(a.lang ? [a.lang] : [])])].map((l) => `<option value="${esc(l)}"${l === a.lang ? " selected" : ""}>${esc(shownLang(l))} only</option>`).join("")}</select></div>` +
+        `<div class="editor-stage"><div class="look-preview" data-scene="${st.preview.scene}" aria-hidden="true"><span data-look-preview style="${esc(lookCss(specOf(a.look, a.changes), a.up))}">${esc(st.preview.text || "Subtitles look like this.")}</span></div>` +
+        `<div class="preview-tools"><div class="seg small" role="radiogroup" aria-label="The picture behind the preview">${[["dark", "Dark scene"], ["bright", "Bright scene"]].map(([v, t]) => `<button type="button" role="radio" data-scene-pick="${v}" aria-checked="${v === st.preview.scene}" aria-pressed="${v === st.preview.scene}">${t}</button>`).join("")}</div><input class="field" data-preview-text maxlength="60" placeholder="Type a line to preview" value="${esc(st.preview.text)}" aria-label="A line of your own for the preview" autocomplete="off"></div>` +
+        `<div class="look-cards" role="radiogroup" aria-label="Look">${[{ id: "", name: Object.keys(a.changes).length ? "Plain" : "Keep as it is" }, ...S.looks].map((l) => `<button type="button" class="look-card" role="radio" data-look-card="${l.id}" aria-checked="${l.id === a.look}" aria-pressed="${l.id === a.look}"><span class="look-card-pic" aria-hidden="true"><span style="${esc(lookCss(l.id, undefined, 5))}">Abc</span></span><span class="look-card-name">${esc(l.name)}</span></button>`).join("")}</div></div>` +
         changesPanel(a) +
-        `<div class="look-preview" aria-hidden="true"><span data-look-preview style="${esc(lookCss(specOf(a.look, a.changes), a.up))}">Subtitles look like this.</span></div>` +
-        `<button type="button" class="btn small" data-style-add>${icon("plus")}${placeTaken(a) ? "Save" : "Add"}</button><p class="field-error" id="e-styles" role="alert" hidden></p></div></div>`;
+        `<button type="button" class="btn primary style-add-btn" data-style-add>${icon("plus")}${placeTaken(a) ? "Save this style" : "Add this style"}</button><p class="field-error" id="e-styles" role="alert" hidden></p></div></div>`;
     },
     finish: () => {
       const missing = missingStep();
       return (
         field("name", "Configuration name", "e.g. Sara, Living room TV", "Optional. Shown on the dashboard instead of the configuration's id.", st.name, "", "text", ' maxlength="40"') +
-        `<h2 class="cfg-group">Review</h2><div class="review">${STEPS.slice(0, 4).map(([id, label]) => `<div class="review-row"><span class="review-label">${label}</span><span class="review-value${problem(id) ? " missing" : ""}">${esc(summary[id]())}</span><button type="button" class="text-link" data-goto="${id}">Change<span class="sr-only"> ${label.toLowerCase()}</span></button></div>`).join("")}</div>` +
+        `<h2 class="cfg-group">Review</h2><div class="review">${STEPS.slice(0, 5).map(([id, label]) => `<div class="review-row"><span class="review-label">${label}</span><span class="review-value${problem(id) ? " missing" : ""}">${esc(summary[id]())}</span><button type="button" class="text-link" data-goto="${id}">Change<span class="sr-only"> ${label.toLowerCase()}</span></button></div>`).join("")}</div>` +
         `<div class="create">${missing ? `<p class="blocked">${icon("alert")}<span>${editing ? "Saving" : "Create"} needs ${NEEDS[missing]} first.</span> <button type="button" class="text-link" data-goto="${missing}">Go to ${STEPS.find(([id]) => id === missing)[1]}</button></p>` : ""}<button type="button" class="btn primary big" id="create"${missing ? ' aria-disabled="true"' : ""}><span class="spin" aria-hidden="true"></span><span>${editing ? "Save configuration" : "Create configuration"}</span></button><p class="field-error" id="e-create" role="alert" hidden></p></div>`
       );
     }
@@ -796,6 +831,11 @@
       $(st.addStyle.scope === "show" ? "#c-style-show" : "#c-style-where", main)?.focus();
     });
     $("#c-style-show", b)?.addEventListener("input", (e) => { st.addStyle.id = e.target.value; });
+    $("#c-style-lang", b)?.addEventListener("change", (e) => {
+      st.addStyle.lang = e.target.value;
+      go("style", { instant: true, keepScroll: true });
+      $("#c-style-lang", main)?.focus();
+    });
     // The preview draws what was last touched: the style being added, or a style's row.
     // A number in a stepper's own range, as its field holds it.
     const inRange = (x, v = x.value) => /^\d+$/.test(String(v).trim()) && Number(v) >= Number(x.dataset.min) && Number(v) <= Number(x.dataset.max);
@@ -856,44 +896,92 @@
     });
     const preview = (look, up) => { const p = $("[data-look-preview]", b); if (p) p.style.cssText = lookCss(look ?? "", up); };
     const addSpec = () => specOf(st.addStyle.look, st.addStyle.changes);
-    $("#c-style-look", b)?.addEventListener("change", (e) => {
+    $$("[data-look-card]", b).forEach((card) => card.addEventListener("click", () => {
       const a = st.addStyle;
+      const picked = card.dataset.lookCard;
       // A height left at the look's usual follows the new look's.
-      if (!String(a.up).trim() || Number(a.up) === usualFor(a.look)) a.up = String(usualFor(e.target.value));
-      a.look = e.target.value;
+      if (!String(a.up).trim() || Number(a.up) === usualFor(a.look)) a.up = String(usualFor(picked));
+      a.look = picked;
       // Changes stay on the new look, but not those it has already; the controls start at its values.
       const own = presetValues(presetOf(a.look));
       for (const k of Object.keys(a.changes)) if (a.changes[k] === own[k]) delete a.changes[k];
       go("style", { instant: true, keepScroll: true });
-      $("#c-style-look", main)?.focus();
-    });
+      $('[data-look-card][aria-checked="true"]', main)?.focus();
+    }));
     $("#c-style-up", b)?.addEventListener("input", (e) => {
       st.addStyle.up = e.target.value;
       markHeight(e.target);
       if (!e.target.value.trim() || goodPct(e.target.value)) preview(addSpec(), st.addStyle.up);
     });
-    $$("#c-style-look, #c-style-up", b).forEach((x) => x.addEventListener("focus", () => preview(addSpec(), st.addStyle.up)));
+    $$("[data-look-card], #c-style-up", b).forEach((x) => x.addEventListener("focus", () => preview(addSpec(), st.addStyle.up)));
+    // The preview's picture and line.
+    $$("[data-scene-pick]", b).forEach((x) => x.addEventListener("click", () => {
+      st.preview.scene = x.dataset.scenePick;
+      $(".look-preview", b).dataset.scene = st.preview.scene;
+      $$("[data-scene-pick]", b).forEach((y) => { y.setAttribute("aria-pressed", String(y === x)); y.setAttribute("aria-checked", String(y === x)); });
+    }));
+    $("[data-preview-text]", b)?.addEventListener("input", (e) => {
+      st.preview.text = e.target.value;
+      const p = $("[data-look-preview]", b);
+      if (p) p.textContent = st.preview.text || "Subtitles look like this.";
+    });
     $(".style-changes", b)?.addEventListener("toggle", (e) => { st.addStyle.open = e.currentTarget.open; });
+    const changed = (k, value) => {
+      const a = st.addStyle;
+      if (value === "" || value === presetValues(presetOf(a.look))[k]) delete a.changes[k];
+      else a.changes[k] = value;
+      const n = Object.keys(a.changes).length;
+      $("[data-changes-count]", b).textContent = changedNote(n);
+      $("[data-changes-clear]", b).style.visibility = n === 0 ? "hidden" : "visible";
+      // How solid the box is counts only with a box.
+      const solid = $('[data-change="k"]', b);
+      if (solid) solid.disabled = !drawnLook(addSpec()).box;
+      $("[data-outline-label]", b).textContent = drawnLook(addSpec()).box ? "Box colour" : "Outline colour";
+      const plain = $('[data-look-card=""] .look-card-name', b);
+      if (plain) plain.textContent = n ? "Plain" : "Keep as it is";
+      preview(addSpec(), a.up);
+    };
     $$("[data-change]", b).forEach((x) => {
       x.addEventListener("focus", () => preview(addSpec(), st.addStyle.up));
       x.addEventListener("input", () => {
         const a = st.addStyle;
         const k = x.dataset.change;
-        const value = k === "b" || k === "x" ? (x.checked ? "1" : "0") : k === "c" || k === "o" ? x.value.slice(1).toLowerCase() : k === "w" || k === "h" ? String(Number(x.value)) : x.value;
-        if (value === presetValues(presetOf(a.look))[k]) delete a.changes[k];
-        else a.changes[k] = value;
+        if (k === "f") {
+          const name = $("[data-font-name]", b);
+          a.otherFont = x.value === "other";
+          name.disabled = !a.otherFont;
+          if (a.otherFont) {
+            delete a.changes.f;
+            changed("g", FONT_NAME.test(fontSpec(name.value)) ? fontSpec(name.value) : "");
+            name.focus();
+            return;
+          }
+          name.value = "";
+          name.removeAttribute("aria-invalid");
+          delete a.changes.g;
+        }
+        const value = ["b", "x", "i"].includes(k) ? (x.checked ? "1" : "0") : k === "c" || k === "o" ? x.value.slice(1).toLowerCase() : ["w", "h", "s"].includes(k) ? String(Number(x.value)) : x.value;
+        changed(k, value);
         const out = $(`[data-out="${k}"]`, b);
-        if (out) out.textContent = `${x.value}${k === "z" ? "%" : ""}`;
-        const n = Object.keys(a.changes).length;
-        $("[data-changes-count]", b).textContent = changedNote(n);
-        $("[data-changes-clear]", b).hidden = n === 0;
-        $("[data-outline-label]", b).textContent = drawnLook(addSpec()).box ? "Box colour" : "Outline colour";
-        const plain = $('#c-style-look option[value=""]', b);
-        if (plain) plain.textContent = n ? "Plain" : "Look unchanged";
-        preview(addSpec(), a.up);
+        if (out) out.textContent = k === "z" ? `${x.value}% of this look's (${drawnLook(addSpec()).size})` : `${x.value}${k === "k" ? "%" : ""}`;
       });
     });
-    $("[data-changes-clear]", b)?.addEventListener("click", () => {
+    $("[data-font-name]", b)?.addEventListener("input", (e) => {
+      const typed = fontSpec(e.target.value);
+      const good = typed === "" || FONT_NAME.test(typed);
+      if (good) e.target.removeAttribute("aria-invalid");
+      else e.target.setAttribute("aria-invalid", "true");
+      $("[data-font-note]", b).textContent = good ? "For a font your player has. The preview shows it only if this device has it too." : "Letters, digits, spaces and . ' - only, 40 at most.";
+      changed("g", good ? typed : "");
+    });
+    $$("[data-seg-change]", b).forEach((x) => x.addEventListener("click", () => {
+      changed(x.dataset.segChange, x.dataset.value);
+      $$(`[data-seg-change="${x.dataset.segChange}"]`, b).forEach((y) => { y.setAttribute("aria-pressed", String(y === x)); y.setAttribute("aria-checked", String(y === x)); });
+    }));
+    $("[data-changes-clear]", b)?.addEventListener("click", (e) => {
+      // It is inside the heading that opens and closes the changes: a press on it is its own.
+      e.preventDefault();
+      e.stopPropagation();
       st.addStyle.changes = {};
       go("style", { instant: true, keepScroll: true });
       $(".style-changes summary", main)?.focus();
@@ -901,9 +989,9 @@
     $$("[data-style-edit]", b).forEach((x) => x.addEventListener("click", () => {
       const r = st.styles[Number(x.dataset.styleEdit)];
       const { base, changes } = parseLook(r.look);
-      st.addStyle = { scope: r.scope, id: r.id ?? "", look: base, up: String(r.up ?? usualFor(r.look)), changes, open: Object.keys(changes).length > 0 };
+      st.addStyle = { scope: r.scope, id: r.id ?? "", lang: r.lang ?? "", look: base, up: String(r.up ?? usualFor(r.look)), changes, open: Object.keys(changes).length > 0 };
       go("style", { instant: true, keepScroll: true });
-      const pick = $("#c-style-look", main);
+      const pick = $('[data-look-card][aria-checked="true"]', main) ?? $("[data-look-card]", main);
       pick?.scrollIntoView({ block: "center" });
       pick?.focus();
     }));
@@ -918,13 +1006,13 @@
       if (a.scope === "show" && !id) return showErrors({ styles: "Paste the show's IMDb link, or its id (tt and digits)." });
       if (typed && !goodPct(typed)) return showErrors({ styles: `How far up is a whole percent from ${S.limits.raiseMin} to ${S.limits.raiseMax}.` });
       if (!look && !up) return showErrors({ styles: `Choose a look, a height other than the usual ${usualFor("")}%, or both.` });
-      const rule = { scope: a.scope, ...(id ? { id, name: st.styles.find((r) => r.id === id)?.name } : {}), ...(look ? { look } : {}), ...(up ? { up } : {}) };
+      const rule = { scope: a.scope, ...(id ? { id, name: st.styles.find((r) => r.id === id)?.name } : {}), ...(a.lang ? { lang: a.lang } : {}), ...(look ? { look } : {}), ...(up ? { up } : {}) };
       // One style for each place: adding one where there is one replaces it.
-      const at = st.styles.findIndex((r) => r.scope === rule.scope && (r.id ?? "") === (rule.id ?? ""));
+      const at = st.styles.findIndex((r) => r.scope === rule.scope && (r.id ?? "") === (rule.id ?? "") && (r.lang ?? "") === (rule.lang ?? ""));
       if (at < 0 && st.styles.length >= S.limits.styles) return showErrors({ styles: `Up to ${S.limits.styles} styles.` });
       if (at >= 0) st.styles[at] = rule;
       else st.styles.push(rule);
-      st.addStyle = { scope: a.scope, id: "", look: "", up: String(S.limits.usualUp), changes: {} };
+      st.addStyle = { scope: a.scope, id: "", lang: "", look: "", up: String(S.limits.usualUp), changes: {} };
       go("style", { instant: true, keepScroll: true });
       $("#c-style-where", main)?.focus();
     });

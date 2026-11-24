@@ -47,7 +47,8 @@ npm run negatives    # every file against every subtitle that isn't its own: non
 | `src/profile.ts` | Per-link settings, encrypted into the link |
 | `src/configure.ts`, `src/page.ts` | The configure page: checks and HTML |
 | `src/sources.ts`, `src/subsource.ts`, `src/downloads.ts` | SubSource, SubDL, OpenSubtitles and other addons; downloads and unpacking |
-| `src/wyzie.ts`, `src/thesubtitledb.ts`, `src/gestdown.ts`, `src/subtitlecat.ts`, `src/animetosho.ts` | The other sources: Wyzie Subs, TheSubtitleDB, Gestdown (Addic7ed's TV subtitles), Subtitle Cat and Anime Tosho (dub captions and signs from anime releases' own tracks) |
+| `src/wyzie.ts`, `src/thesubtitledb.ts`, `src/gestdown.ts`, `src/subtitlecat.ts`, `src/animetosho.ts`, `src/tsukihime.ts`, `src/aninzb.ts` | The other sources: Wyzie Subs, TheSubtitleDB, Gestdown (Addic7ed's TV subtitles), Subtitle Cat, and the three that read anime releases' own tracks: Anime Tosho (dub captions and signs), TsukiHime and aninzb (every language) |
+| `src/pace.ts`, `src/xz.ts` | The gate for services that limit how often an address may ask them; unpacking the `.xz` files extracted tracks are kept in |
 | `src/kept.ts` | Subtitles kept on the server (`CAPTIONS_DIR`) |
 | `src/cinemeta.ts` | A title's name, year, TVDB id, genres and country from Cinemeta, shared by the sources (and whether it is anime) |
 | `src/ids.ts`, `src/animelists.ts`, `src/anidb.ts`, `src/animetitles.ts` | Anime: ids other than IMDb, episode numbering, and a show's seasons by their own titles (the season map) |

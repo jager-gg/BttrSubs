@@ -9,7 +9,7 @@
  * same thing, one copy goes: the dub's written-out signs and song placeholders, or the release's
  * song lines where the dub sings the song itself.
  */
-import { assStamp, assText, fields, FONTS, PLAIN, PLAIN_HEIGHT, PLAIN_MARGIN, stamp, type Look } from "./srt.js";
+import { alignmentOf, assStamp, assText, fields, FONTS, PLAIN, PLAIN_HEIGHT, PLAIN_MARGIN, stamp, type Look } from "./srt.js";
 import { styleWords } from "./sync.js";
 
 const SONG_WORDS = ["song", "op", "ed", "opening", "ending", "kara", "karaoke", "lyric", "insert", "romaji", "kanji"];
@@ -183,7 +183,8 @@ export function dubStyle(format: string[], height: number, { own, look, raise }:
     const k = height / PLAIN_HEIGHT;
     Object.assign(values, {
       fontname: l.font, fontsize: tenth(l.size * k), primarycolour: l.colour, outlinecolour: l.outlineColour, backcolour: l.backColour, bold: l.bold ? "-1" : "0",
-      borderstyle: String(l.border), outline: tenth(l.outline * k), shadow: tenth(l.shadow * k), alignment: "2",
+      italic: l.italic ? "-1" : "0", spacing: tenth((l.spacing ?? 0) * k),
+      borderstyle: String(l.border), outline: tenth(l.outline * k), shadow: tenth(l.shadow * k), alignment: String(alignmentOf(l)),
       marginl: String(Math.round(10 * k)), marginr: String(Math.round(10 * k)), marginv: String(Math.round((l.margin ?? PLAIN_MARGIN) * k))
     });
   }

@@ -26,7 +26,7 @@ BttrSubs is a self-hosted subtitle addon for [AIOStreams](https://github.com/Vir
 - **English Dub captions.** Subtitles written from the English dub, so the words match the voices. When none exist, official English closed captions are used.
 - **Regular English.** A separate choice, for watching in the original language.
 - **Other languages.** The best subtitle for each language you pick. Official translations rank first, and machine translations are left out unless you allow them.
-- **Many sources.** SubSource, SubDL, Wyzie Subs, OpenSubtitles, TheSubtitleDB, Gestdown, Anime Tosho and Subtitle Cat, plus up to 3 other Stremio subtitle addons. Results from all of them are ranked together.
+- **Many sources.** SubSource, SubDL, Wyzie Subs, OpenSubtitles, TheSubtitleDB, Gestdown, Anime Tosho, TsukiHime, aninzb and Subtitle Cat, plus up to 3 other Stremio subtitle addons. Results from all of them are ranked together.
 - **Your own subtitles.** Put a subtitle no site has in a folder on the server and it is offered like the rest.
 - **A configuration per person.** Each person has their own configuration with their own keys, encrypted into their install URL.
 - **Dashboard.** What was played, errors, API limits per key, each configuration, and settings you can change without a restart. It works on a phone.
@@ -103,7 +103,7 @@ If you run your own AIOStreams, set **Pipeline cache TTL** to `60` in its admin 
 
 ### 2. Choose your sources
 
-OpenSubtitles, TheSubtitleDB, Gestdown and Anime Tosho need no key and start switched on. Add a SubSource, SubDL or Wyzie Subs key to search those too, and paste the manifest URL of any other subtitle addon you use.
+OpenSubtitles, TheSubtitleDB, Gestdown, Anime Tosho, TsukiHime and aninzb need no key and start switched on. The last three are asked for anime only. Add a SubSource, SubDL or Wyzie Subs key to search those too, and paste the manifest URL of any other subtitle addon you use.
 
 Subtitle Cat starts switched off. It finds uploads the other sites lack, such as fan translations, but only by name, so one of its subtitles is listed only after it has synced to your file.
 
@@ -127,10 +127,10 @@ You also choose whether hearing-impaired subtitles are included, left out or the
 
 | Switch | Starts | When it's on |
 |---|---|---|
-| Keep the subtitle's own styling | On | A subtitle uploaded as ASS keeps its fonts, colours and positions. Off sends every subtitle as plain SRT |
+| Keep the subtitle's own styling | On | A subtitle uploaded as ASS keeps its fonts, colours and positions. Off sends subtitles as plain SRT, unless a style, Signs & songs or the file's own style applies |
 | Remove sound descriptions | Off | [door creaks], (laughs), sung ♪ lines and speaker names like JOHN: are taken out. The timing stays the same |
 | Signs & songs with English Dub | Off | Anime only. The on-screen text and song lines a fan release typesets are shown with English Dub, timed to your file. Needs a player that shows ASS |
-| Use your file's subtitle style | Off | English Dub and English take the font, size and colours of the subtitles inside your file |
+| Use your file's subtitle style | Off | Every subtitle takes the font, size and colours of the subtitles inside your file |
 
 Below the switches you can add **styles**: a look, a height on screen, or both, for all subtitles, anime, series, films or one show.
 
@@ -180,6 +180,7 @@ Set these in `.env`. Most can also be changed on the dashboard without a restart
 | `ANIDB_CLIENT`, `ANIDB_CLIENT_VER` | none | An AniDB HTTP API client, used to tell an anime's seasons apart by title | Yes |
 | `ANIME_TITLES_DATASET` | `on` | Without an AniDB client, read season titles from the anime-offline-database instead | Yes |
 | `CAPTIONS_DIR` | `captions` | The folder of subtitles kept on the server (see [below](#subtitles-kept-on-your-server)) | No |
+| `CACHE_DIR` | `cache` in the image, `.cache` outside it | The folder the cache is kept in | No |
 | `TIME_ZONE` | `UTC` | The time zone the dashboard shows times in, as an IANA name | Yes |
 | `UPDATE_CHECK` | `on` | Once a day, ask GitHub whether a newer release is out, so the dashboard can say so | Yes |
 | `LOG_DAYS` | `7` | Days of log files kept in the cache volume. `0` keeps none | Yes |

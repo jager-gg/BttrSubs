@@ -4772,7 +4772,7 @@ export function firstPassSync(key: string): SyncResult | undefined {
 }
 
 /** Bumped when the sync method changes: older results are ignored and download URLs change, so no cache keeps old timing. */
-export const SYNC_VERSION = 35;
+export const SYNC_VERSION = 36;
 
 /**
  * Whether captions belong to the file at all: at least half of the measured
@@ -4783,7 +4783,8 @@ export const SYNC_VERSION = 35;
 /**
  * How far past the playing file's end a subtitle's lines may run and still be the file's: lines that
  * run further belong to something longer (a special, another cut, two episodes in one file) and are
- * never timed to it. Calibration (11-15): a two-part special's subtitles ran to 54.8 min against a
+ * not timed to it, unless the ones inside the file's length are the file's by its own track (the
+ * first of two episodes in one subtitle). Calibration (11-15): a two-part special's subtitles ran to 54.8 min against a
  * 24.0 min episode, whose own subtitles ran to 22.4-24.0 min.
  */
 const OUTRUN_FACTOR = 1.5;
@@ -4791,6 +4792,34 @@ const OUTRUN_FACTOR = 1.5;
 /** When the last of these lines ends. */
 export function lastLineEnd(captions: Cue[]): number {
   return captions.reduce((last, c) => Math.max(last, c.end), 0);
+}
+
+/**
+ * Whether lines that run far past this file hold it at their start: the ones inside the file's length
+ * are the file's by its own subtitle track (an episode and the next in one subtitle). From the file's
+ * readings as they are kept: nothing is looked up or read for it.
+ */
+export async function holdsFileAtStart(filename: string, captions: Cue[]): Promise<boolean> {
+  const stored = await storedAnchors(filename);
+  if (!stored || stored.speechOnly || !outrunsFile(captions, stored.duration)) return false;
+  return startIsTheFiles(stored, captions.filter((c) => c.start < stored.duration));
+}
+
+/**
+ * Whether these lines, the part of a longer subtitle inside the file's length, are the file's: they
+ * fit its own track, and at one shift. A subtitle that holds this episode and the next was made for
+ * this cut, so its timing doesn't step; a long subtitle of another title, thick with lines, can fit
+ * stretch by stretch at shifts seconds apart, and that is chance.
+ *
+ * Calibration: an episode's own subtitle held in a two-episode one fit at 9 points, all 0 ms; a film's
+ * 144-minute subtitle against a 24-minute episode fit at 13 points whose shifts ran from -4.9 to 18.2 s.
+ */
+function startIsTheFiles(stored: FileAnchors, inside: Cue[]): boolean {
+  if (inside.length === 0) return false;
+  const judged = judge(stored, inside);
+  if (judged.verdict !== "synced" || judged.anchors.length === 0) return false;
+  const shifts = judged.anchors.map((a) => a.offset);
+  return Math.max(...shifts) - Math.min(...shifts) <= AGREE_MS;
 }
 
 /** Whether these lines run far past the end of a file this long (OUTRUN_FACTOR). */
@@ -5002,7 +5031,15 @@ export function syncCaptions(
     let stored = await fileAnchors(aiostreamsUrl, videoId, type, filename);
     if (!stored) return undefined; // lookup failed: try again next time
     // Lines running far past the file's end are another title's (outrunsFile): left as they are, with
-    // nothing measured or heard for them, so a fallback gets its turn at once.
+    // nothing heard for them, so a fallback gets its turn at once. Unless they hold this file and more
+    // after it (an episode and the next in one subtitle): then the lines inside the file's length are
+    // the file's by its own track, and those are what is timed.
+    const inside = outrunsFile(captions, stored.duration) && !stored.speechOnly ? captions.filter((c) => c.start < (stored as FileAnchors).duration) : [];
+    if (startIsTheFiles(stored, inside)) {
+      count("sync.outrunsPart");
+      console.log(`sync: ${filename}: its lines run to ${Math.round(lastLineEnd(captions) / 60000)} min, past the file's ${Math.round(stored.duration / 60000)} min, but the ${inside.length} inside the file's length are the file's: timed by those`);
+      captions = inside;
+    }
     if (outrunsFile(captions, stored.duration)) {
       console.log(`sync: ${filename}: its lines run to ${Math.round(lastLineEnd(captions) / 60000)} min, past the file's ${Math.round(stored.duration / 60000)} min: another title's, not counted`);
       count("sync.outruns");

@@ -15,6 +15,8 @@ import { count, noteError, noteKeyCall } from "./stats.js";
 import { downloadSubtitleArchive } from "./subsource.js";
 import { downloadSubtitleCat, notWrittenIn } from "./subtitlecat.js";
 import { downloadAnimeTosho } from "./animetosho.js";
+import { downloadTsukihime } from "./tsukihime.js";
+import { downloadAninzb } from "./aninzb.js";
 import { gestdownDownloadUrl } from "./gestdown.js";
 import { downloadWyzie } from "./wyzie.js";
 import { theSubtitleDbDownloadUrl } from "./thesubtitledb.js";
@@ -103,6 +105,8 @@ async function fetchSource(ref: string, keys: SourceKeys): Promise<Buffer> {
   if (ref.startsWith("kc")) return readKept(ref);
   if (ref.startsWith("sc")) return downloadSubtitleCat(ref);
   if (ref.startsWith("at")) return downloadAnimeTosho(ref);
+  if (ref.startsWith("th")) return downloadTsukihime(ref);
+  if (ref.startsWith("az")) return downloadAninzb(ref, keys.addonUrl);
   if (ref.startsWith("wz")) return downloadWyzie(ref, keys.wyzie);
   if (ref.startsWith("tb") || ref.startsWith("gd")) {
     // The keyless sources' links lead on to hosts they choose (TheSubtitleDB's to its file store), so
@@ -158,7 +162,7 @@ async function downloadOnce(ref: string, keys: SourceKeys): Promise<string> {
   const file = downloadFile(ref);
   if (!(await exists(file))) {
     // One real download from a source; a cached file costs nothing.
-    const source = /^(?:ss)?\d+$/.test(ref) ? "subsource" : ref.startsWith("sd") ? "subdl" : ref.startsWith("os") ? "opensubtitles" : ref.startsWith("sc") ? "subtitlecat" : ref.startsWith("tb") ? "thesubtitledb" : ref.startsWith("gd") ? "gestdown" : ref.startsWith("at") ? "animetosho" : ref.startsWith("wz") ? "wyzie" : ref.startsWith("kc") ? "kept" : "addons";
+    const source = /^(?:ss)?\d+$/.test(ref) ? "subsource" : ref.startsWith("sd") ? "subdl" : ref.startsWith("os") ? "opensubtitles" : ref.startsWith("sc") ? "subtitlecat" : ref.startsWith("tb") ? "thesubtitledb" : ref.startsWith("gd") ? "gestdown" : ref.startsWith("at") ? "animetosho" : ref.startsWith("th") ? "tsukihime" : ref.startsWith("az") ? "aninzb" : ref.startsWith("wz") ? "wyzie" : ref.startsWith("kc") ? "kept" : "addons";
     count(`fetch.${source}`);
     try {
       await writeFileWhole(file, await fetchSource(ref, keys));

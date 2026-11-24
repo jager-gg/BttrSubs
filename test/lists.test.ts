@@ -723,6 +723,23 @@ describe("a subtitle whose lines run far past the file's end", () => {
     expect((await stats.statsView("t")).days[0].total["downloads.outruns.certain"]).toBe(outrunsBefore + 1);
   }, 20000);
 
+  it("is timed and sent when its lines inside the file's length are the file's: an episode and the next in one subtitle", async () => {
+    const lines = dialogue(63);
+    const before = stats.countedToday("sync.outrunsPart");
+    // This episode's lines, 600 ms late, then the next episode's for another half hour.
+    const both = [...lines.map((c) => ({ start: c.start + 600, end: c.end + 600 })), ...dialogue(64, 30 * 60000).map((c) => ({ start: c.start + 20 * 60000, end: c.end + 20 * 60000 }))];
+    sites((url) => (url.hostname === "api.subsource.net" && /\/subtitles\/9545\/download$/.test(url.pathname) ? new Response(srt(both)) : undefined));
+    await fileWithTrack("Show.S01E05.Pair.mkv", lines);
+    const token = seal({ subsource: "sk_outrun_pair_key_042", aiostreams: AIO, languages: ["Arabic"], allowMachine: false, hearingImpaired: "include" });
+    const query = new URLSearchParams({ lang: "Arabic", season: "1", episode: "5", sv: "12", vid: "tt0000745:1:5", type: "series", file: "Show.S01E05.Pair.mkv" });
+    const res = await realFetch(`${base}/${token}/download/ss9545/subtitle.srt?${query}`);
+    const starts = [...(await res.text()).matchAll(/(\d\d):(\d\d):(\d\d),(\d\d\d) -->/g)].map((m) => ((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000 + Number(m[4]));
+    // Its first lines are this episode's, moved onto the file's.
+    expect(starts.length).toBeGreaterThanOrEqual(lines.length);
+    expect(lines.filter((c, i) => Math.abs(starts[i] - c.start) <= 100).length / lines.length).toBeGreaterThan(0.9);
+    expect(stats.countedToday("sync.outrunsPart")).toBe(before + 1);
+  }, 20000);
+
   it("is never the stand-in on a first play: the episode's runtime from Cinemeta tells before the file is read", async () => {
     const special = dialogue(67, 50 * 60000);
     const fallbackLines = dialogue(71);
@@ -1045,7 +1062,7 @@ describe("signs & songs and the file's own style", () => {
     ""
   ].join("\n");
 
-  it("puts both in English Dub's link, sent as ASS, and only the file's style in English's", async () => {
+  it("puts both in English Dub's link, sent as ASS, and the file's style alone in every other track's", async () => {
     const dub = sub(9851, "Show S01E05 [Eng Dubbed Version]", { downloads: 100 });
     const regular = sub(9852, "Show S01E05 1080p WEB", { downloads: 50 });
     const arabic = sub(9853, "Show S01E05 1080p WEB", { language: "arabic" });
@@ -1056,7 +1073,7 @@ describe("signs & songs and the file's own style", () => {
     expect(byRef.ss9851.pathname.endsWith("/subtitle.ass")).toBe(true);
     expect([byRef.ss9851.searchParams.get("signs"), byRef.ss9851.searchParams.get("filestyle")]).toEqual(["1", "1"]);
     expect([byRef.ss9852.searchParams.has("signs"), byRef.ss9852.searchParams.get("filestyle")]).toEqual([false, "1"]);
-    expect([byRef.ss9853.searchParams.has("signs"), byRef.ss9853.searchParams.has("filestyle"), byRef.ss9853.pathname.endsWith(".srt")]).toEqual([false, false, true]);
+    expect([byRef.ss9853.searchParams.has("signs"), byRef.ss9853.searchParams.get("filestyle"), byRef.ss9853.pathname.endsWith(".ass")]).toEqual([false, "1", true]);
   }, 20000);
 
   it("labels English Dub \"Signs\" once signs are found for the playing file, and only then", async () => {
@@ -1545,10 +1562,13 @@ describe("a raised show", () => {
     } finally {
       config.maxPerLanguage = before;
     }
-    // The form sends it, and the review says it when it isn't one.
+    // The form sends the configuration's own number, so a server that lists fewer for now doesn't overwrite it; the page
+    // shows what the server lists of it, and the review says it when it isn't one.
     const { readFileSync } = await import("node:fs");
     const setup = readFileSync(new URL("../assets/ui/setup.js", import.meta.url), "utf8");
-    expect(setup).toContain("perLanguage: Math.min(Number(st.per) || 1, S.limits.perLanguageMax)");
+    expect(setup).toContain("perLanguage: Number(st.per) || 1,");
+    expect(setup).toContain("per: C?.perLanguage ?? 1,");
+    expect(setup).toContain("const perOf = () => Math.min(Number(st.per) || 1, S.limits.perLanguageMax);");
     expect(setup).toContain('perOf() > 1 ? `${perOf()} per language` : ""');
   });
 
@@ -1594,6 +1614,13 @@ describe("styles", () => {
     expect(styleFor(rules!, { imdbId: "tt0000900", type: "series", anime: true })).toEqual({ look: "bold", up: 10 });
     expect(styleFor(rules!, { imdbId: "tt0000801", type: "series", anime: true })).toEqual({ look: "bold", up: 20 });
     expect(styleFor([], { imdbId: "tt0000801", type: "series" })).toEqual({ look: undefined, up: undefined });
+    // A style for the track's language comes before any for every language, then the most specific place.
+    const spoken: Settings["styles"] = [{ scope: "anime", look: "bold", up: 10 }, { scope: "all", lang: "Arabic", look: "large" }, { scope: "series", lang: "Arabic", up: 20 }];
+    expect(styleFor(spoken!, { imdbId: "tt0000900", type: "series", anime: true }, "Arabic")).toEqual({ look: "large", up: 20 });
+    expect(styleFor(spoken!, { imdbId: "tt0000900", type: "series", anime: true }, "arabic")).toEqual({ look: "large", up: 20 });
+    expect(styleFor(spoken!, { imdbId: "tt0000900", type: "series", anime: true }, "English")).toEqual({ look: "bold", up: 10 });
+    expect(styleFor(spoken!, { imdbId: "tt0000900", type: "movie" }, "Arabic")).toEqual({ look: "large", up: undefined });
+    expect(styleFor(spoken!, { imdbId: "tt0000900", type: "series", anime: true })).toEqual({ look: "bold", up: 10 });
   });
 
   it("draw a plain subtitle in the look, and keep an upload's own styling only when the link says so", async () => {
@@ -1616,6 +1643,15 @@ describe("styles", () => {
     expect(toAss(plain, ".srt", undefined, "yellow_o0000ff_w2.4_h0_ftrebuchet_z120_b1")).toMatch(/^Style: Default,Trebuchet MS,24,&H0000FFFF,&H000000FF,&H00FF0000,&H80000000,-1,0,0,0,100,100,0,0,1,2\.4,0,2,10,10,12,1$/m);
     expect(toAss(plain, ".srt", undefined, "plain_x1_o202020")).toMatch(/^Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H80202020,&H80000000,0,0,0,0,100,100,0,0,3,1,0\.5,2,10,10,12,1$/m);
     expect(toAss(plain, ".srt", undefined, "boxed_x0")).toMatch(/^Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,12,1$/m);
+    // Italic, space between the letters, at the top; a box as solid as asked, half when it isn't.
+    expect(toAss(plain, ".srt", undefined, "yellow_i1_s1.5_t1")).toMatch(/^Style: Default,Arial,20,&H0000FFFF,&H000000FF,&H00000000,&H80000000,0,-1,0,0,100,100,1.5,0,1,1.6,0.6,8,10,10,12,1$/m);
+    expect(toAss(plain, ".srt", undefined, "plain_x1_k100")).toMatch(/^Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,/m);
+    expect(toAss(plain, ".srt", undefined, "plain_x1_k20")).toMatch(/^Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&HCC000000,/m);
+    expect(toAss(plain, ".srt", undefined, "plain_x1_k50")).toBe(toAss(plain, ".srt", undefined, "plain_x1"));
+    // A font named by hand, a + for each space; not beside one from the list, and nothing that would end the style row.
+    expect(toAss(plain, ".srt", undefined, "plain_gNoto+Sans")).toMatch(/^Style: Default,Noto Sans,20,/m);
+    expect(toAss(plain, ".srt", undefined, "yellow_gDejaVu+Sans+Mono_b1")).toMatch(/^Style: Default,DejaVu Sans Mono,20,&H0000FFFF,.*,-1,0,0,0,100,100,0,0,1,/m);
+    for (const bad of ["plain_gA,B", "plain_g", "plain_g+Sans", "plain_gSans!", `plain_g${"a".repeat(41)}`, "plain_farial_gNoto"]) expect(toAss(plain, ".srt", undefined, bad), bad).toBe(toAss(plain, ".srt"));
     // A size is the preset's share, and the preset's own height stays; a change to its own value changes nothing.
     expect(toAss(plain, ".srt", undefined, "anime_z125")).toMatch(/^Style: Default,Trebuchet MS,24,.*,2,10,10,14,1$/m);
     expect(toAss(plain, ".srt", undefined, "anime_cffffff")).toBe(toAss(plain, ".srt", undefined, "anime"));
@@ -1653,9 +1689,23 @@ describe("styles", () => {
     const body = await (await realFetch(styled.subtitles[0].url.replace("https://sync.example", base))).text();
     // 12% of the script's 288: 35.
     expect(body).toMatch(/^Style: Default,Arial,20,&H0000FFFF,.*,2,10,10,35,1$/m);
+    // A look with changes of its own goes through the link and is drawn too: a blue outline, 2.4 wide.
+    const changed = await list({ ...plainSettings, styles: [{ scope: "series" as const, look: "yellow_o0000ff_w2.4" }] }, "tt0000744:1:6", playing("Show.S01E06.Styled.mkv"));
+    expect(new URL(changed.subtitles[0].url).searchParams.get("look")).toBe("yellow_o0000ff_w2.4");
+    const drawn = await (await realFetch(changed.subtitles[0].url.replace("https://sync.example", base))).text();
+    expect(drawn).toMatch(/^Style: Default,Arial,20,&H0000FFFF,&H000000FF,&H00FF0000,&H80000000,0,0,0,0,100,100,0,0,1,2\.4,/m);
+    // A look that names nothing this server draws is no look: the plain style.
+    const unknown = new URL(changed.subtitles[0].url.replace("https://sync.example", base));
+    unknown.searchParams.set("look", "yellow_q1");
+    expect(await (await realFetch(unknown)).text()).toMatch(/^Style: Default,Arial,20,&H00FFFFFF,/m);
     // A style for films isn't for a series: its links stay SRT.
     const films = await list({ ...plainSettings, styles: [{ scope: "movie" as const, look: "yellow" }] }, "tt0000744:1:6", playing("Show.S01E06.Styled.mkv"));
     for (const track of films.subtitles) expect(new URL(track.url).pathname).toMatch(/\/subtitle\.srt$/);
+    // A style for one language is for that language's tracks only.
+    const mine = await list({ ...plainSettings, styles: [{ scope: "all" as const, lang: "Arabic", look: "large" }] }, "tt0000744:1:6", playing("Show.S01E06.Styled.mkv"));
+    expect(new URL(mine.subtitles[0].url).searchParams.get("look")).toBe("large");
+    const others = await list({ ...plainSettings, styles: [{ scope: "all" as const, lang: "Dutch", look: "large" }] }, "tt0000744:1:6", playing("Show.S01E06.Styled.mkv"));
+    expect(new URL(others.subtitles[0].url).pathname.endsWith("/subtitle.srt")).toBe(true);
     // With Keep the subtitle's own styling, a look leaves an upload's own styling be.
     const kept = await list({ ...plainSettings, keepAss: true, styles: [{ scope: "all" as const, look: "boxed" }] }, "tt0000744:1:6", playing("Show.S01E06.Styled.mkv"));
     expect(new URL(kept.subtitles[0].url).searchParams.get("own")).toBe("1");
@@ -2350,4 +2400,38 @@ describe("the syncs' head start, on a list one slow source holds to its time", (
     await new Promise((resolve) => setTimeout(resolve, 2500));
     expect(stats.countedToday("lists.headStart")).toBe(before);
   }, 15000);
+});
+
+describe("a link whose AIOStreams instance this server no longer accepts", () => {
+  it("opens only its configure page, without that account, and is answered again once saved with an accepted instance", async () => {
+    const { routePath, storeSettings, forgetStoredSettings } = await import("../src/profile.js");
+    const made: Settings = { subsource: "sk_lapsed_link_key_77", aiostreams: "https://gone.example/stremio/abcd1234-0000-4000-8000-000000000000/pass/manifest.json", aiostreamsPassword: "kept-password", languages: ["Arabic"], allowMachine: false, hearingImpaired: "include", label: "Living room" };
+    // Made while the instance was one this server accepts, which it then stops being.
+    const { config } = await import("../src/config.js");
+    const accepted = config.allowedAiostreams;
+    config.allowedAiostreams = [...accepted, "https://gone.example"];
+    const token = seal(made);
+    config.allowedAiostreams = accepted;
+    // Nothing of it is listed or sent.
+    expect(routePath(`/${token}/subtitles/series/tt0000795:1:5.json`)).toBeUndefined();
+    expect(routePath(`/${token}/download/ss1/subtitle.srt`)).toBeUndefined();
+    expect(routePath(`/${token}/manifest.json`)).toBeUndefined();
+    // Its configure page opens: everything but the account, under the id the link had.
+    const page = routePath(`/${token}/configure`);
+    expect(page?.lapsed).toBe(true);
+    expect(page?.settings).toMatchObject({ subsource: "sk_lapsed_link_key_77", languages: ["Arabic"], label: "Living room" });
+    expect(page?.settings && "aiostreams" in page.settings).toBe(false);
+    expect(page?.settings && "aiostreamsPassword" in page.settings).toBe(false);
+    expect(page?.profile?.name).toMatch(/^abcd1234\/[0-9a-f]{6}$/);
+    expect((await realFetch(`${base}/${token}/configure`)).status).not.toBe(404);
+    // Saved with an instance this server accepts, the same link is answered like any other, under the same id.
+    storeSettings(token, { ...made, aiostreams: AIO, linkId: page!.profile!.name });
+    const again = routePath(`/${token}/subtitles/series/tt0000795:1:5.json`);
+    expect(again?.lapsed).toBeUndefined();
+    expect(again?.profile?.name).toBe(page!.profile!.name);
+    expect(again?.settings?.aiostreams).toBe(AIO);
+    // A token that was altered opens nothing.
+    expect(routePath(`/${token.slice(0, -4)}AAAA/configure`)).toBeUndefined();
+    forgetStoredSettings();
+  });
 });

@@ -30,7 +30,7 @@ export function scriptJson(value: unknown): string {
  * server at /sources/<id>.png so no viewer's browser ever calls the site itself. The logos are their
  * owners' trademarks, shown only to say which service is which (THIRD_PARTY_NOTICES.md).
  */
-export const SOURCE_ICONS = ["subsource", "subdl", "wyzie", "opensubtitles", "thesubtitledb", "gestdown", "animetosho", "subtitlecat", "aiostreams", "stremio", "aiometadata", "jellyfin"] as const;
+export const SOURCE_ICONS = ["subsource", "subdl", "wyzie", "opensubtitles", "thesubtitledb", "gestdown", "animetosho", "tsukihime", "aninzb", "subtitlecat", "aiostreams", "stremio", "aiometadata", "jellyfin"] as const;
 
 const UI_DIR = fileURLToPath(new URL("../assets/ui/", import.meta.url));
 const TYPES: Record<string, string> = { ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".woff2": "font/woff2" };

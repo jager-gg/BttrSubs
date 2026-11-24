@@ -121,7 +121,7 @@
   // Big numbers, small units: "2 h 10 min" sets 2 and 10 large, h and min small.
   const splitUnit = (text) => text.replace(/\s?([A-Za-z]+)/g, '<span class="unit">$1</span>').replace(/<\/span>(\d)/g, "</span> $1");
   const when = (t) => (dayLabel(t) === "Today" ? hhmm(t) : `${dayLabel(t).replace("Yesterday", "yesterday")}, ${hhmm(t)}`);
-  const SRC = { subsource: "SubSource", subdl: "SubDL", wyzie: "Wyzie Subs", opensubtitles: "OpenSubtitles", thesubtitledb: "TheSubtitleDB", gestdown: "Gestdown", animetosho: "Anime Tosho", subtitlecat: "Subtitle Cat", addons: "Added addons", aiostreams: "AIOStreams" };
+  const SRC = { subsource: "SubSource", subdl: "SubDL", wyzie: "Wyzie Subs", opensubtitles: "OpenSubtitles", thesubtitledb: "TheSubtitleDB", gestdown: "Gestdown", animetosho: "Anime Tosho", tsukihime: "TsukiHime", aninzb: "aninzb", subtitlecat: "Subtitle Cat", addons: "Added addons", aiostreams: "AIOStreams" };
   const srcId = (name) => {
     const k = String(name).toLowerCase().replace(/[^a-z]/g, "");
     return Object.keys(SRC).find((id) => k.startsWith(id)) ?? null;
@@ -908,7 +908,7 @@
     const scope = real ? `${more ? `${n(D.errorsWeek)}${D.errorsMore ? "+" : ""} errors ${span}; the newest ${n(real)} are listed` : `${n(real)} ${real === 1 ? "error" : "errors"}${from} ${span}`}${kinds > 1 ? `, ${n(kinds)} kinds` : ""}` : `No errors${from} ${span}`;
     // Files AIOStreams' list dropped while they played: the ones still timed leave no error, so both are counted here.
     const gone = D.unlisted.lost + D.unlisted.recovered;
-    const lost = gone && state.errFor === "all" ? `<p class="err-scope err-lost">${n(gone)} playing ${gone === 1 ? "file was" : "files were"} missing from AIOStreams' list in the last 7 days: ${n(D.unlisted.recovered)} still timed through the link an earlier list gave, ${n(D.unlisted.lost)} not found, so ${D.unlisted.lost === 1 ? "its" : "their"} subtitles carry a notice instead of timing.${D.unlisted.lost ? " If this keeps happening for one configuration, the AIOStreams URL saved in it may be older than the one its app uses now: paste the app's own URL into it again." : ""}</p>` : "";
+    const lost = gone && state.errFor === "all" ? `<p class="err-scope err-lost">${n(gone)} playing ${gone === 1 ? "file was" : "files were"} missing from AIOStreams' list ${span}${D.unlisted.recovered ? `: ${D.unlisted.lost ? n(D.unlisted.recovered) : gone === 1 ? "it was" : "all"} still timed through the link an earlier list gave` : ""}${D.unlisted.lost ? `${D.unlisted.recovered ? `, ${n(D.unlisted.lost)} not found, so ${D.unlisted.lost === 1 ? "its" : "their"}` : `, so ${gone === 1 ? "its" : "their"}`} subtitles carry a notice instead of timing` : ""}.${D.unlisted.lost ? " If this keeps happening for one configuration, the AIOStreams URL saved in it may be older than the one its app uses now: paste the app's own URL into it again." : ""}</p>` : "";
     const row = (g) => `<article class="err${g.debug ? " is-test" : ""}">
           <span class="err-src">${srcImg(g.where)}<i class="err-dot" aria-hidden="true"></i></span>
           <div class="err-body">
@@ -921,13 +921,13 @@
         </article>`;
     const body = groups.length
       ? groups.map(row).join("")
-      : `<div class="empty"><div class="bubs-spot">${Bubs.full({ mood: "beam", shadow: false })}</div><div><h2>No errors${from}${state.clearedAt > NOW - 7 * DAY ? ` since ${hhmm(state.clearedAt)}` : ""}</h2><p>Smooth as butter. When a source fails or times out, it shows here with the configuration it happened in.</p>${state.errFor === "all" ? "" : '<p style="margin-top:12px"><button class="btn small" type="button" id="err-all">Show every configuration</button></p>'}</div></div>`;
+      : `<div class="empty"><div class="bubs-spot">${Bubs.full({ mood: "beam", shadow: false })}</div><div><h2>No errors${from}${state.clearedAt > NOW - 7 * DAY ? ` since ${when(state.clearedAt)}` : ""}</h2><p>Smooth as butter. When a source fails or times out, it shows here with the configuration it happened in.</p>${state.errFor === "all" ? "" : '<p style="margin-top:12px"><button class="btn small" type="button" id="err-all">Show every configuration</button></p>'}</div></div>`;
     return `
       <header class="page-head"><h1 id="h-errors">Errors</h1><p>Sources that failed or timed out in the last 7 days. Repeats are one row with a count. Clearing hides them from every count on this page. Nothing is deleted, and Undo is offered for a few seconds after.</p></header>
       <div class="block">
-        <div class="err-tools">${week.length ? `<button class="btn" type="button" id="clear-errors">${icon("hide")}Clear errors</button>` : ""}${links.length > 1 ? `<select class="select" id="err-link" aria-label="Configuration"><option value="all">All configurations</option>${links.map((id) => `<option value="${esc(id)}"${state.errFor === id ? " selected" : ""}>${esc(labelOf(id))}</option>`).join("")}</select>` : ""}${tests ? `<label class="switch-row"><input class="switch" type="checkbox" role="switch" id="err-debug"${state.debug ? " checked" : ""}> Include the ${n(tests)} ${tests === 1 ? "error" : "errors"} from test plays</label>` : ""}<span class="err-scope">${scope}</span></div>
-        ${lost}
+        <div class="err-tools">${week.length || gone ? `<button class="btn" type="button" id="clear-errors">${icon("hide")}Clear errors</button>` : ""}${links.length > 1 ? `<select class="select" id="err-link" aria-label="Configuration"><option value="all">All configurations</option>${links.map((id) => `<option value="${esc(id)}"${state.errFor === id ? " selected" : ""}>${esc(labelOf(id))}</option>`).join("")}</select>` : ""}${tests ? `<label class="switch-row"><input class="switch" type="checkbox" role="switch" id="err-debug"${state.debug ? " checked" : ""}> Include the ${n(tests)} ${tests === 1 ? "error" : "errors"} from test plays</label>` : ""}${groups.length ? `<span class="err-scope">${scope}</span>` : ""}</div>
         <div>${body}</div>
+        ${lost}
       </div>`;
   }
   // Clearing hides the errors from every count; the server keeps them, so the message's Undo brings them back.
@@ -1024,7 +1024,7 @@
     return t ? t.split(/\s+/).join(", ") : "none";
   };
   // The timeout this addon needs in AIOStreams for a list that may take this long.
-  const BUDGET_SLACK = 2500;
+  const BUDGET_SLACK = 3000;
   const budgetLine = (v) => (/^\d+$/.test(String(v).trim()) ? `Timeout in AIOStreams: ${(Number(v) + BUDGET_SLACK).toLocaleString("en-US")} ms or more.` : "");
   const hint = (s) => (s.hint ? `<span class="live">${esc(s.hint)}</span>` : "");
   function control(s) {

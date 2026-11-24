@@ -52,6 +52,10 @@ export interface Profile {
   gestdown: boolean;
   /** Anime Tosho (no key): dub captions from anime releases' own tracks. */
   animetosho: boolean;
+  /** TsukiHime (no key): anime releases' own subtitle tracks, in every language picked. */
+  tsukihime: boolean;
+  /** aninzb (no key): the same, from the anime releases it has processed on usenet. */
+  aninzb: boolean;
   /** Other Stremio subtitle addons asked too. */
   addons: Addon[];
   /** AIOStreams install URL used to find the playing file, as reached from here; no sync without it. */
@@ -80,7 +84,7 @@ export interface Profile {
   dropSounds: boolean;
   /** Signs & songs with English Dub (see Settings.signs). */
   signs: boolean;
-  /** English in the playing file's own subtitle style (see Settings.ownStyle). */
+  /** Every track in the playing file's own subtitle style (see Settings.ownStyle). */
   ownStyle: boolean;
   /** Its styles, shows moved up before styles existed among them (styleRulesOf). */
   styles: StyleRule[];
@@ -98,10 +102,12 @@ export interface Settings {
   opensubtitles?: boolean;
   /** Subtitle Cat, which needs no key. Off unless a link turns it on. */
   subtitlecat?: boolean;
-  /** TheSubtitleDB, Gestdown and Anime Tosho, which need no key: on unless a link turns them off (false). */
+  /** TheSubtitleDB, Gestdown, Anime Tosho, TsukiHime and aninzb, which need no key: on unless a link turns them off (false). */
   thesubtitledb?: boolean;
   gestdown?: boolean;
   animetosho?: boolean;
+  tsukihime?: boolean;
+  aninzb?: boolean;
   /** Other Stremio subtitle addons, by manifest URL. */
   addons?: Addon[];
   /** AIOStreams install URL (https://<allowed host>/stremio/<uuid>/<password>/manifest.json); no sync without it. */
@@ -142,7 +148,7 @@ export interface Settings {
    * dub's lines (signs.ts, signsjob.ts).
    */
   signs?: boolean;
-  /** English Dub and English in the playing file's own subtitle style: the font, size and colours of its dialogue subtitles. */
+  /** Every track in the playing file's own subtitle style: the font, size and colours of its dialogue subtitles. */
   ownStyle?: boolean;
   /** Looks and heights for the subtitles, for everything, anime, series, films or one show (StyleRule). */
   styles?: StyleRule[];
@@ -188,13 +194,15 @@ export interface StyleRule {
   /** The show's IMDb id and its name as Cinemeta gives it, for a one-show style. */
   id?: string;
   name?: string;
+  /** The one language it is for, as the configuration names its languages ("Arabic", "English" for the dub); every language when not given. */
+  lang?: string;
   look?: string;
   /** How far up, as a share of the picture's height from the bottom. */
   up?: number;
 }
 
-/** The four kinds and a style for each show moved up before. */
-export const MAX_STYLES = 4 + MAX_RAISED;
+/** The four kinds, a style for each show moved up before, and a dozen more for styles of one language. */
+export const MAX_STYLES = 4 + MAX_RAISED + 12;
 
 /** A configuration's styles: its own, then each show it moved up before styles existed, as a one-show style. */
 export function styleRulesOf(s: Pick<Settings, "styles" | "raise">): StyleRule[] {
@@ -206,10 +214,16 @@ export function styleRulesOf(s: Pick<Settings, "styles" | "raise">): StyleRule[]
 /** How specific each place is: one show, then anime, then series or films, then everything. */
 const SPECIFIC: Record<StyleScope, number> = { show: 3, anime: 2, series: 1, movie: 1, all: 0 };
 
-/** One title's look and height: for each, the most specific of the styles that apply which sets it. */
-export function styleFor(rules: StyleRule[], title: { imdbId?: string; type?: string; anime?: boolean }): { look?: string; up?: number } {
-  const applies = (r: StyleRule) => r.scope === "all" || (r.scope === "show" ? Boolean(title.imdbId) && r.id === title.imdbId : r.scope === "anime" ? title.anime === true : r.scope === title.type);
-  const ranked = rules.filter(applies).sort((a, b) => SPECIFIC[b.scope] - SPECIFIC[a.scope]);
+/**
+ * One title's look and height, for a track in `lang` (as the configuration names its languages): for
+ * each, the first of the styles that apply which sets it. A style for that language comes before one
+ * for every language, since a language's own style is there for what its script needs (a font, a
+ * size); among those, the most specific place first.
+ */
+export function styleFor(rules: StyleRule[], title: { imdbId?: string; type?: string; anime?: boolean }, lang?: string): { look?: string; up?: number } {
+  const here = (r: StyleRule) => r.scope === "all" || (r.scope === "show" ? Boolean(title.imdbId) && r.id === title.imdbId : r.scope === "anime" ? title.anime === true : r.scope === title.type);
+  const spoken = (r: StyleRule) => r.lang === undefined || (lang !== undefined && r.lang.toLowerCase() === lang.toLowerCase());
+  const ranked = rules.filter((r) => here(r) && spoken(r)).sort((a, b) => Number(b.lang !== undefined) - Number(a.lang !== undefined) || SPECIFIC[b.scope] - SPECIFIC[a.scope]);
   return { look: ranked.find((r) => r.look)?.look, up: ranked.find((r) => r.up)?.up };
 }
 export const RAISE_MIN = 1;
@@ -223,7 +237,7 @@ export const DEFAULT_RAISE = 15;
 export const IMDB_ID = /^tt\d{5,10}$/;
 
 const TOKEN_VERSION = "2";
-const LANGUAGE_NAME = /^[A-Za-z][A-Za-z ()-]{1,30}$/;
+export const LANGUAGE_NAME = /^[A-Za-z][A-Za-z ()-]{1,30}$/;
 /** Letters (any script), digits, spaces and a little punctuation, up to 40 characters. */
 export const LINK_LABEL = /^[\p{L}\p{N}][\p{L}\p{N} .,'’&()_-]{0,39}$/u;
 
@@ -295,11 +309,12 @@ export function settingsProblem(s: Settings): string | undefined {
   for (const r of styles) {
     if (!r || !(STYLE_SCOPES as readonly string[]).includes(r.scope)) return "Styles: each is for every subtitle, anime, series, films or one show";
     if (r.scope === "show" ? !IMDB_ID.test(String(r.id)) || typeof r.name !== "string" || r.name.length > 100 : r.id !== undefined || r.name !== undefined) return "Styles: a show's style needs its IMDb id";
+    if (r.lang !== undefined && (typeof r.lang !== "string" || !LANGUAGE_NAME.test(r.lang))) return "Styles: a style's language must be a language's name";
     if (r.look !== undefined && (typeof r.look !== "string" || !lookOf(r.look))) return "Styles: that look isn't one this server can draw";
     if (r.up !== undefined && (!Number.isInteger(r.up) || r.up < RAISE_MIN || r.up > RAISE_MAX)) return `Styles: how far up must be ${RAISE_MIN} to ${RAISE_MAX}%`;
     if (r.look === undefined && r.up === undefined) return "Styles: each sets a look, how far up, or both";
   }
-  if (new Set(styles.map((r) => `${r.scope}:${r.id ?? ""}`)).size !== styles.length) return "Styles: one for each place";
+  if (new Set(styles.map((r) => `${r.scope}:${r.id ?? ""}:${r.lang?.toLowerCase() ?? ""}`)).size !== styles.length) return "Styles: one for each place and language";
   if (s.label !== undefined && (typeof s.label !== "string" || !LINK_LABEL.test(s.label))) return "Configuration name: use up to 40 letters, digits, spaces or simple punctuation";
   return undefined;
 }
@@ -335,6 +350,36 @@ export function sealSettings(settings: Settings): string {
   const problem = settingsProblem(settings);
   if (problem) throw new Error(problem);
   return TOKEN_VERSION + seal(JSON.stringify(settings));
+}
+
+/** An install URL's shape, whichever instance it names. */
+const INSTALL_URL = /^https?:\/\/[^/]+\/stremio\/([^/\s]+)\/[^/\s]+\/manifest\.json$/;
+
+/**
+ * The settings of a link whose only fault is its AIOStreams instance: one this server accepted when
+ * the link was made and doesn't accept any more. They come without that account (its address, its
+ * other install URLs, its password) and under the id the link has, so its configure page can open
+ * and take another instance. Undefined for any other token, a sound one included.
+ */
+export function settingsOfLapsed(token: string): Settings | undefined {
+  if (!token.startsWith(TOKEN_VERSION)) return undefined;
+  const json = unseal(token.slice(TOKEN_VERSION.length));
+  if (!json) return undefined;
+  try {
+    const settings = JSON.parse(json) as Settings;
+    if (typeof settings.aiostreams !== "string" || parseAiostreamsUrl(settings.aiostreams)) return undefined;
+    const account = INSTALL_URL.exec(settings.aiostreams.trim())?.[1];
+    if (!account) return undefined;
+    const rest: Settings = { ...settings };
+    delete rest.aiostreams;
+    delete rest.aiostreamsAlso;
+    delete rest.aiostreamsPassword;
+    if (settingsProblem(rest)) return undefined;
+    const linkId = rest.linkId && LINK_ID.test(rest.linkId) ? rest.linkId : `${account.slice(0, 8)}/${keyTagOf(rest)}`;
+    return { ...rest, linkId };
+  } catch {
+    return undefined;
+  }
 }
 
 /** The settings in a token, or undefined if it isn't one of ours or was altered. */
@@ -379,10 +424,15 @@ export function keptLinkSettings(edited: Settings, before: Settings | undefined,
   return linkId ? { ...edited, linkId } : edited;
 }
 
+/** The six characters of a link's id that tell its keys apart. */
+function keyTagOf(settings: Settings): string {
+  return createHash("sha256").update(settings.subsource || settings.subdl || "opensubtitles").digest("hex").slice(0, 6);
+}
+
 export function profileFromSettings(settings: Settings, token: string): Profile {
   const aio = settings.aiostreams ? parseAiostreamsUrl(settings.aiostreams) : undefined;
   const uuid = aio?.path.split("/")[2] ?? "no-sync";
-  const keyTag = createHash("sha256").update(settings.subsource || settings.subdl || "opensubtitles").digest("hex").slice(0, 6);
+  const keyTag = keyTagOf(settings);
   const own = aio && config.ownAiostreams === aio.origin;
   // This server's own instance is looked up inside the Docker network; others over the internet.
   const reached = (parsed: { origin: string; path: string }) => `${own ? config.aiostreamsBase : parsed.origin}${parsed.path}/manifest.json`;
@@ -405,6 +455,8 @@ export function profileFromSettings(settings: Settings, token: string): Profile 
     thesubtitledb: settings.thesubtitledb !== false,
     gestdown: settings.gestdown !== false,
     animetosho: settings.animetosho !== false,
+    tsukihime: settings.tsukihime !== false,
+    aninzb: settings.aninzb !== false,
     addons: settings.addons ?? [],
     aiostreamsUrl,
     aiostreamsAlso,
@@ -435,6 +487,8 @@ export interface Routed {
   settings?: Settings;
   /** The rest of the path, e.g. "/subtitles/series/tt1:1:1.json". */
   resource: string;
+  /** The link's AIOStreams instance is no longer accepted here: only its configure page is answered (settingsOfLapsed). */
+  lapsed?: boolean;
 }
 
 /** Splits "/<token>/<resource>". Undefined for anything else, including altered tokens. */
@@ -445,10 +499,21 @@ export function routePath(path: string): Routed | undefined {
   const resource = `/${match[1]}`;
   if (head === "") return ["/manifest.json", "/configure", "/configure/check", "/configure/test"].includes(resource) ? { resource } : undefined;
   const token = head.slice(1);
-  if (!openSettings(token) || isDeleted(token)) return undefined;
-  // Edits made on the link's configure page are kept under the link, so its URL never changes.
-  const settings = storedSettings(token) ?? (openSettings(token) as Settings);
-  return { profile: profileFromSettings(settings, token), token, settings, resource };
+  const own = openSettings(token);
+  if (own) {
+    if (isDeleted(token)) return undefined;
+    // Edits made on the link's configure page are kept under the link, so its URL never changes.
+    const settings = storedSettings(token) ?? own;
+    return { profile: profileFromSettings(settings, token), token, settings, resource };
+  }
+  // A link made with an instance this server no longer accepts: saved again with one it does, it is
+  // answered like any other; until then only its configure page is, so its person can change it there.
+  const lapsed = settingsOfLapsed(storedSealed(token) ?? token) ?? settingsOfLapsed(token);
+  if (!lapsed || isDeleted(token)) return undefined;
+  const kept = storedSettings(token);
+  if (kept) return { profile: profileFromSettings(kept, token), token, settings: kept, resource };
+  if (!/^\/configure(?:\/check|\/test)?$/.test(resource)) return undefined;
+  return { profile: profileFromSettings(lapsed, token), token, settings: lapsed, resource, lapsed: true };
 }
 
 // ---------- settings edited in place ----------
@@ -468,6 +533,16 @@ function linkFile(token: string): string {
 
 /** Read once per link, then kept in memory (this server is the only one writing them). */
 const stored = new Map<string, Settings | null>();
+
+/** A link's edited settings as they are kept, sealed: read whether or not they open (settingsOfLapsed). */
+function storedSealed(token: string): string | undefined {
+  try {
+    const { sealed } = JSON.parse(readFileSync(linkFile(token), "utf8")) as { sealed?: unknown };
+    return typeof sealed === "string" ? sealed : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function storedSettings(token: string): Settings | undefined {
   const file = linkFile(token);
@@ -560,6 +635,8 @@ export function linkSummary(token: string): LinkSummary | undefined {
     ...(s.thesubtitledb !== false ? ["TheSubtitleDB"] : []),
     ...(s.gestdown !== false ? ["Gestdown"] : []),
     ...(s.animetosho !== false ? ["Anime Tosho"] : []),
+    ...(s.tsukihime !== false ? ["TsukiHime"] : []),
+    ...(s.aninzb !== false ? ["aninzb"] : []),
     ...(addons ? [addons === 1 ? "1 addon" : `${addons} addons`] : [])
   ];
   return {

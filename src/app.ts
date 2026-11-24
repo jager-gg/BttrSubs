@@ -14,7 +14,7 @@ import { LATE_ALTERNATES, lateAlternates, noteLateAlternates } from "./lateAlter
 import { baseLanguage, filedUnder, forVariant, languageLabel, otherKind } from "./variants.js";
 import { addonSubtitles, OFFICIAL_OPENSUBTITLES, openSubtitles, openSubtitlesByHash, openSubtitlesOwnSearchOn, refOf, subdlSubtitles, withHashMatches } from "./sources.js";
 import type { SourceKeys } from "./downloads.js";
-import { configurePathOf, deleteLink, installUrlOf, isPaused, keptLinkSettings, knownLinks, noteLinkToken, openUrl, RAISE_MAX, RAISE_MIN, renameLink, routePath, setPaused, storeSettings, styleFor, type LinkChange, type Profile, type Settings } from "./profile.js";
+import { REGULAR_ENGLISH, configurePathOf, deleteLink, installUrlOf, isPaused, keptLinkSettings, knownLinks, noteLinkToken, openUrl, RAISE_MAX, RAISE_MIN, renameLink, routePath, setPaused, storeSettings, styleFor, type LinkChange, type Profile, type Settings } from "./profile.js";
 import { addonPasswordFingerprint, changeSettings, loadSettings, resetSettings } from "./settings.js";
 import { checkStep, configurePage, saveConfiguration, testAccount } from "./configure.js";
 import { addToAiostreams, entryTimeoutMs } from "./aiostreamsAddon.js";
@@ -22,6 +22,8 @@ import { kitsuToImdb, seasonMap } from "./ids.js";
 import { absoluteEpisode, findCandidateMovies, FIRST_RECORDS, getSubtitlesIn, madeInEnglish, namedRecords } from "./subsource.js";
 import { subtitleCatSubtitles, titleOf } from "./subtitlecat.js";
 import { animeToshoSubtitles, dubPhaseOf, startEpisodeSearch } from "./animetosho.js";
+import { tsukihimeSubtitles } from "./tsukihime.js";
+import { aninzbSubtitles } from "./aninzb.js";
 import { isAnime, metaOf } from "./cinemeta.js";
 import { gestdownSubtitles } from "./gestdown.js";
 import { keptSubtitles } from "./kept.js";
@@ -31,13 +33,13 @@ import { fileOwnStyle, readySigns, signsKept, signsUnderWay, startSigns } from "
 import { MAX_MERGED_BYTES, mergeWithSigns } from "./signs.js";
 import { decodeSubtitle } from "./text.js";
 import { languageTitle } from "./langcodes.js";
-import { LOOKS, lookOf, toAss, toSrt, withNotice } from "./srt.js";
+import { lookOf, toAss, toSrt, withNotice } from "./srt.js";
 import { withoutSounds } from "./clean.js";
 import { tierName, type QualityTier } from "./quality.js";
 import { ADDON_ID, type RankedSubtitle, type SeasonMap, type StremioSubtitleRequest, type SubSourceSubtitle } from "./types.js";
 import { isWatched, watching } from "./turns.js";
 import { noteViewer, viewerAddress } from "./viewers.js";
-import { embeddedLanguages, holdFileLookup, fileDuration, fileHasSubtitles, fileName, hasEnglishVoices, headerUnderWay, fileRef, sameFileRef, scopedRef, firstPassSync, outrunsFile, fallsShortOfFile, captionCues, knownSync, startFileHash, storedFileHash, SYNC_VERSION, syncCaptions, syncedByVoices, syncKey, trackMisfit, type SyncResult, notListed } from "./sync.js";
+import { embeddedLanguages, holdFileLookup, holdsFileAtStart, fileDuration, fileHasSubtitles, fileName, hasEnglishVoices, headerUnderWay, fileRef, sameFileRef, scopedRef, firstPassSync, outrunsFile, fallsShortOfFile, captionCues, knownSync, startFileHash, storedFileHash, SYNC_VERSION, syncCaptions, syncedByVoices, syncKey, trackMisfit, type SyncResult, notListed } from "./sync.js";
 import { type ActivityDetail, listedRelease, clearActivity, clearErrors, clearLinkActivity, clearLinkErrors, undoClearActivity, undoClearErrors, undoClearLinkActivity, undoClearLinkErrors, count, downloadsToday, noteActivity, noteError, noteLinkKeys, noteLinkLabel, requestContext, scrub, setLinkLabel, statsView } from "./stats.js";
 import { serveUi, SOURCE_ICONS, webManifest } from "./ui.js";
 import { diagnosticsText } from "./diagnostics.js";
@@ -81,10 +83,10 @@ function downloadUrl(
   look?: string,
   own = false
 ): string {
-  // Signs & songs with English Dub (Settings.signs), and English in the playing file's own subtitle
-  // style (Settings.ownStyle): both for a file being played, and both sent as ASS.
+  // Signs & songs with English Dub (Settings.signs), and every track in the playing file's own
+  // subtitle style (Settings.ownStyle): both for a file being played, and both sent as ASS.
   const signs = Boolean(profile.signs && playing && !lang);
-  const fileStyle = Boolean(profile.ownStyle && playing && (!lang || lang === "English"));
+  const fileStyle = Boolean(profile.ownStyle && playing);
   // "subtitle.ass" for a subtitle sent as ASS (Settings.keepAss, a style's look or height, signs or the
   // file's style): players that go by the name read it as ASS.
   const url = new URL(`${profile.prefix}/download/${refOf(subtitle)}/subtitle.${ass || raise || look || signs || fileStyle ? "ass" : "srt"}`, baseUrl);
@@ -346,6 +348,8 @@ function sourceOfRef(ref: string): string {
   if (ref.startsWith("os")) return "OpenSubtitles";
   if (ref.startsWith("sc")) return "Subtitle Cat";
   if (ref.startsWith("at")) return "Anime Tosho";
+  if (ref.startsWith("th")) return "TsukiHime";
+  if (ref.startsWith("az")) return "aninzb";
   if (ref.startsWith("tb")) return "TheSubtitleDB";
   if (ref.startsWith("gd")) return "Gestdown";
   if (ref.startsWith("wz")) return "Wyzie Subs";
@@ -473,7 +477,7 @@ function addonRoutes(): express.Router {
   router.get("/configure", configureGate, (req, res) => {
     res.set("Cache-Control", "no-store");
     res.set("Referrer-Policy", "no-referrer");
-    res.type("html").send(configurePage(res.locals.settings as Settings | undefined, sessionRoles(req)));
+    res.type("html").send(configurePage(res.locals.settings as Settings | undefined, sessionRoles(req), res.locals.lapsed === true));
   });
 
   router.post("/configure", configureGate, checkLimit, express.json({ limit: "16kb" }), async (req, res, next) => {
@@ -808,6 +812,17 @@ function addonRoutes(): express.Router {
       }
       return all;
     }
+    /** A source of anime releases' own tracks (tsukihime.ts, aninzb.ts): asked about anime only, as Anime Tosho is, and for every language picked. */
+    async function releaseTracksJob(name: string, ask: typeof tsukihimeSubtitles): Promise<SubSourceSubtitle[]> {
+      const request = { ...stremioRequest };
+      const [meta, map, counted] = await Promise.all([metaOf(request.type, imdbId), seasonMapJob, absolute]);
+      if (counted !== undefined) request.absoluteEpisode = counted;
+      if (!map && !request.id.startsWith("kitsu") && !isAnime(meta)) {
+        notAsked.add(name);
+        return [];
+      }
+      return ask(request, meta?.name ?? map?.show, wanted);
+    }
     // Anime Tosho's tracks as each release is read: a list that can't wait for the rest has these.
     const toshoFound: SubSourceSubtitle[] = [];
     // When its first dub track comes in, against the list's time: once a list, however it comes (a
@@ -862,6 +877,9 @@ function addonRoutes(): express.Router {
             return reading || open ? Promise.all([reading, open]) : undefined;
           })
         : Promise.resolve([]),
+      // Anime releases' own subtitle tracks, in every language picked (tsukihime.ts): anime only.
+      profile.tsukihime ? source(releaseTracksJob("TsukiHime", tsukihimeSubtitles), "TsukiHime") : Promise.resolve([]),
+      profile.aninzb ? source(releaseTracksJob("aninzb", aninzbSubtitles), "aninzb") : Promise.resolve([]),
       ...profile.addons.map((addon) => inTime(noted(addonSubtitles(addon, asked, wanted)), [], "an added addon"))
     ]);
     // Subtitles matched to the file's hash, when there is one (unless that addon is added already),
@@ -1450,7 +1468,8 @@ function addonRoutes(): express.Router {
     const anime = profile.styles.some((r) => r.scope === "anime")
       ? stremioRequest.id.startsWith("kitsu") || isAnime(await Promise.race([metaOf(stremioRequest.type, stremioRequest.imdbId).catch(() => undefined), new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), RUNTIME_WAIT_MS).unref())]))
       : false;
-    const style = styleFor(profile.styles, { imdbId: stremioRequest.imdbId, type: stremioRequest.type, anime });
+    // A track's style: the title's, for the track's language as the configuration names it (the dub and its CC are "English").
+    const styleOf = (code: string | undefined) => styleFor(profile.styles, { imdbId: stremioRequest.imdbId, type: stremioRequest.type, anime }, code === undefined ? "English" : code === "English" ? REGULAR_ENGLISH : code);
     const asAss = new Set<RankedSubtitle>();
     if (profile.keepAss) {
       await Promise.all(
@@ -1468,7 +1487,7 @@ function addonRoutes(): express.Router {
         lang: sentLanguage(track),
         // Players and AIOStreams' and AIOMetadata's Jellyfin servers show label as the track's description.
         label: trackLabel(track.code, confirmed(track) || audioOf.has(track.subtitle) ? true : synced(track) ? "pending" : false, audioOf.get(track.subtitle), track.cc, signsFound && !track.code && (synced(track) || track.alts.length > 0)),
-        url: downloadUrl(baseUrl, profile, track.subtitle, track.season, track.episode, synced(track) || track.alts.length ? playing : undefined, track.code, track.alts.map((alt) => ({ ref: refOf(alt), at: place(alt), pick: alt.pick })), asAss.has(track.subtitle), style.up, style.look, profile.keepAss)
+        url: downloadUrl(baseUrl, profile, track.subtitle, track.season, track.episode, synced(track) || track.alts.length ? playing : undefined, track.code, track.alts.map((alt) => ({ ref: refOf(alt), at: place(alt), pick: alt.pick })), asAss.has(track.subtitle), styleOf(track.code).up, styleOf(track.code).look, profile.keepAss)
       })),
       cacheMaxAge: keepFor,
       staleRevalidate: settling ? 0 : 900,
@@ -1652,7 +1671,10 @@ function addonRoutes(): express.Router {
         // Lines running far past the episode's length are another title's (outrunsEpisode): by the
         // file's own length, not synced and its fallbacks tried at once; by the runtime alone, synced as
         // usual. Either way the first fallback stands in for it when nothing syncs in time.
-        const outruns = await outrunsEpisode(fetched.file, lang, file, vid, type);
+        const outrunsAll = await outrunsEpisode(fetched.file, lang, file, vid, type);
+        // Lines that run past the file but hold it at their start (holdsFileAtStart) are timed like any other.
+        const partly = outrunsAll === "certain" && (await holdsFileAtStart(file, captionCues(decodeSubtitle(await readFile(fetched.file), lang), path.extname(fetched.file).toLowerCase())).catch(() => false));
+        const outruns = partly ? undefined : outrunsAll;
         if (outruns) {
           count(`downloads.outruns.${outruns}`);
           console.log(`download ${ref}: its lines run far past the episode's ${outruns === "certain" ? "file" : "runtime"}, another title's`);
@@ -1789,7 +1811,8 @@ function addonRoutes(): express.Router {
       const asAss = /\.(ass|ssa)$/i.test(param(req.params.filename));
       const raise = Number(typeof req.query.raise === "string" ? req.query.raise : "");
       const raised = asAss && Number.isInteger(raise) && raise >= RAISE_MIN && raise <= RAISE_MAX ? raise : undefined;
-      const look = asAss && typeof req.query.look === "string" && Object.hasOwn(LOOKS, req.query.look) ? req.query.look : undefined;
+      // Any look this server can draw: a preset's name, or one with a style's own changes on it (lookOf).
+      const look = asAss && typeof req.query.look === "string" && lookOf(req.query.look) ? req.query.look : undefined;
       // Sound descriptions come out of the text sent, after the timing: the sync never sees the difference.
       const decoded = notThisFile ? NOT_THIS_FILE : decodeSubtitle(await readFile(served), lang);
       const text = req.query.sounds === "0" && !notThisFile ? withoutSounds(decoded, ext) : decoded;
@@ -2156,6 +2179,7 @@ export function createApp(): express.Express {
     res.locals.profile = routed.profile;
     res.locals.settings = routed.settings;
     res.locals.token = routed.token;
+    res.locals.lapsed = routed.lapsed === true;
     const query = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
     req.url = routed.resource + query;
     const link = (routed.profile as Profile | undefined)?.name;

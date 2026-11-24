@@ -11,7 +11,7 @@ import { config } from "./config.js";
 import { fetchPublic, readCapped } from "./net.js";
 import { ADDON_ID } from "./types.js";
 import { metaOf } from "./cinemeta.js";
-import { IMDB_ID, LINK_LABEL, MAX_ADDONS, MAX_OTHER_URLS, MAX_PASSWORD, MAX_STYLES, MAX_TOKEN, RAISE_MAX, RAISE_MIN, STYLE_SCOPES, parseAiostreamsUrl, sameAiostreamsConfiguration, sealSettings, settingsProblem, styleRulesOf, type Addon, type Settings, type StyleRule, type StyleScope } from "./profile.js";
+import { LANGUAGE_NAME, IMDB_ID, LINK_LABEL, MAX_ADDONS, MAX_OTHER_URLS, MAX_PASSWORD, MAX_STYLES, MAX_TOKEN, RAISE_MAX, RAISE_MIN, STYLE_SCOPES, parseAiostreamsUrl, sameAiostreamsConfiguration, sealSettings, settingsProblem, styleRulesOf, type Addon, type Settings, type StyleRule, type StyleScope } from "./profile.js";
 import { lookOf } from "./srt.js";
 import { accountIn, jellyfinSignIn, linkedAppsOf, signIn } from "./aiostreamsAccount.js";
 import { wyzieAccepts } from "./wyzie.js";
@@ -129,7 +129,10 @@ async function gatherStyles(input: ConfigureInput, current?: Settings): Promise<
     const up = typedUp === undefined ? undefined : percentOf(typedUp);
     if (typedUp !== undefined && up === undefined) return { error: `Styles: how far up must be ${RAISE_RANGE}` };
     if (look === undefined && up === undefined) continue;
-    let rule: StyleRule = { scope, ...(look ? { look } : {}), ...(up ? { up } : {}) };
+    // For one language, when the page says which.
+    const lang = typeof raw?.lang === "string" && raw.lang.trim() ? raw.lang.trim() : undefined;
+    if (lang !== undefined && !LANGUAGE_NAME.test(lang)) return { error: "Styles: a style's language must be a language's name" };
+    let rule: StyleRule = { scope, ...(lang ? { lang } : {}), ...(look ? { look } : {}), ...(up ? { up } : {}) };
     if (scope === "show") {
       const id = /tt\d{5,10}/.exec(String(raw?.id ?? ""))?.[0];
       if (!id || !IMDB_ID.test(id)) return { error: "Styles: paste the show's IMDb link, or its id (tt…)" };
@@ -139,9 +142,9 @@ async function gatherStyles(input: ConfigureInput, current?: Settings): Promise<
         if (!meta) return { error: `Styles: Cinemeta doesn't know ${id}. Check the IMDb id` };
         name = `${meta.name}${meta.year ? ` (${meta.year})` : ""}`.slice(0, 100);
       }
-      rule = { scope, id, name, ...(look ? { look } : {}), ...(up ? { up } : {}) };
+      rule = { scope, id, name, ...(lang ? { lang } : {}), ...(look ? { look } : {}), ...(up ? { up } : {}) };
     }
-    const at = rules.findIndex((r) => r.scope === rule.scope && r.id === rule.id);
+    const at = rules.findIndex((r) => r.scope === rule.scope && r.id === rule.id && r.lang?.toLowerCase() === rule.lang?.toLowerCase());
     if (at >= 0) rules[at] = rule;
     else rules.push(rule);
     if (rules.length > MAX_STYLES) return { error: `Styles: up to ${MAX_STYLES}` };
@@ -225,6 +228,8 @@ function draft(input: ConfigureInput, addons: Addon[], current?: Settings, style
     ...(input.thesubtitledb === false ? { thesubtitledb: false } : {}),
     ...(input.gestdown === false ? { gestdown: false } : {}),
     ...(input.animetosho === false ? { animetosho: false } : {}),
+    ...(input.tsukihime === false ? { tsukihime: false } : {}),
+    ...(input.aninzb === false ? { aninzb: false } : {}),
     ...(addons.length ? { addons } : {}),
     aiostreams,
     ...(also.length ? { aiostreamsAlso: also } : {}),

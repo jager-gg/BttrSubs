@@ -1,6 +1,6 @@
 /**
- * The configure page: a guided flow in five steps, Sync (required: it's what BttrSubs is for), Sources,
- * Languages, Filters, then Name and create. setup.js draws it in the browser; the server checks each step
+ * The configure page: a guided flow in six steps, Sync (required: it's what BttrSubs is for), Sources,
+ * Languages, Filters, Style, then Name and create. setup.js draws it in the browser; the server checks each step
  * as it's left and makes or saves the configuration (configure.ts).
  *
  * Someone changing an existing link (AIOStreams' Reconfigure button, or the dashboard's Configure) opens on
@@ -13,7 +13,7 @@ import { languageLabel } from "./variants.js";
 import { accountIn } from "./aiostreamsAccount.js";
 import { config, PUBLIC_AIOSTREAMS } from "./config.js";
 import { DEFAULT_RAISE, MAX_ADDONS, MAX_OTHER_URLS, MAX_STYLES, perLanguageOf, RAISE_MAX, RAISE_MIN, REGULAR_ENGLISH, styleRulesOf, type Settings } from "./profile.js";
-import { CHANGE_LIMITS, FONTS, LOOKS, PLAIN, USUAL_UP, usualUpOf, type Look } from "./srt.js";
+import { CHANGE_LIMITS, FONT_NAME, FONTS, LOOKS, PLAIN, USUAL_UP, usualUpOf, type Look } from "./srt.js";
 
 /** An ASS colour (&HAABBGGRR) as CSS (#RRGGBB). */
 const cssColour = (ass: string): string => `#${ass.slice(-2)}${ass.slice(-4, -2)}${ass.slice(-6, -4)}`;
@@ -30,6 +30,9 @@ const lookForPage = (id: string, look: Look) => ({
   bold: look.bold,
   size: look.size,
   box: look.border === 3,
+  italic: look.italic === true,
+  spacing: look.spacing ?? 0,
+  top: look.top === true,
   outline: look.outline,
   shadow: look.shadow,
   up: usualUpOf(look)
@@ -54,7 +57,7 @@ const COMMON_LANGUAGES = [
 const CHIP_LABELS: Record<string, string> = { "Portuguese": "Portuguese (Portugal)", "Portuguese (BR)": "Portuguese (Brazil)", "Tagalog": "Filipino" };
 
 /** What setup.js starts from: the configuration as it stands, without any key or URL. */
-export function setupState(current: Settings | undefined) {
+export function setupState(current: Settings | undefined, instanceGone = false) {
   const hostOf = (url: string) => {
     try {
       return new URL(url).hostname;
@@ -64,6 +67,8 @@ export function setupState(current: Settings | undefined) {
   };
   return {
     editing: Boolean(current),
+    // The AIOStreams instance this configuration was made with is no longer one this server accepts (settingsOfLapsed).
+    instanceGone,
     regularEnglish: REGULAR_ENGLISH,
     languages: COMMON_LANGUAGES,
     // The names shown for the ones a player shows under a fuller name (a regional kind, variants.ts).
@@ -71,6 +76,8 @@ export function setupState(current: Settings | undefined) {
     // This server's own AIOStreams first, then the public ones it accepts.
     instances: [...(config.ownAiostreams ? [config.ownAiostreams] : []), ...PUBLIC_AIOSTREAMS.filter((o) => config.allowedAiostreams.includes(o) && o !== config.ownAiostreams)],
     own: Boolean(config.ownAiostreams),
+    // OpenSubtitles is listed from its own search, which marks machine translations, only with this server's key.
+    openSubtitlesKey: Boolean(config.openSubtitlesApiKey),
     // perLanguageMax: the most subtitles a language this server lists (MAX_SUBTITLES_PER_LANGUAGE), so the page never offers more.
     limits: { addons: MAX_ADDONS, otherUrls: MAX_OTHER_URLS, styles: MAX_STYLES, raiseMin: RAISE_MIN, raiseMax: RAISE_MAX, raiseDefault: DEFAULT_RAISE, usualUp: USUAL_UP, perLanguageMax: config.maxPerLanguage },
     // The looks a style can choose, and the plain one, with what the page's preview draws and changes of each.
@@ -78,6 +85,8 @@ export function setupState(current: Settings | undefined) {
     plainLook: lookForPage("plain", PLAIN),
     fonts: Object.entries(FONTS).map(([id, name]) => ({ id, name })),
     changeLimits: CHANGE_LIMITS,
+    // A font named by hand: what a name may hold (srt.ts FONT_NAME), for the page to say so before the server does.
+    fontName: FONT_NAME.source,
     saved: { aio: Boolean(current?.aiostreams), aioAlso: current?.aiostreamsAlso?.length ?? 0, aioPw: Boolean(current?.aiostreamsPassword), subsource: Boolean(current?.subsource), subdl: Boolean(current?.subdl), wyzie: Boolean(current?.wyzie) },
     // The saved AIOStreams account, as its fields show it: where it is and which configuration. Never its password.
     account: (current?.aiostreams && accountIn(current.aiostreams)) || undefined,
@@ -89,6 +98,8 @@ export function setupState(current: Settings | undefined) {
           thesubtitledb: current.thesubtitledb !== false,
           gestdown: current.gestdown !== false,
           animetosho: current.animetosho !== false,
+          tsukihime: current.tsukihime !== false,
+          aninzb: current.aninzb !== false,
           languages: current.languages,
           allowMachine: Boolean(current.allowMachine),
           skipEmbedded: current.keepEmbedded !== true,
@@ -101,7 +112,7 @@ export function setupState(current: Settings | undefined) {
           perLanguage: perLanguageOf(current),
           label: current.label ?? "",
           addons: (current.addons ?? []).map((a) => ({ name: a.name, host: hostOf(a.url) })),
-          styles: styleRulesOf(current).map((r) => ({ scope: r.scope, ...(r.id ? { id: r.id, name: r.name } : {}), ...(r.look ? { look: r.look } : {}), ...(r.up ? { up: r.up } : {}) }))
+          styles: styleRulesOf(current).map((r) => ({ scope: r.scope, ...(r.id ? { id: r.id, name: r.name } : {}), ...(r.lang ? { lang: r.lang } : {}), ...(r.look ? { look: r.look } : {}), ...(r.up ? { up: r.up } : {}) }))
         }
       : null
   };
@@ -113,7 +124,7 @@ export function setupState(current: Settings | undefined) {
  * no address bar and keeps its own sign-in apart from the browser's, so it is the owner's one way there,
  * and anyone else who follows it meets the dashboard's sign-in.
  */
-export function configurePage(current?: Settings, roles: Role[] = []): string {
+export function configurePage(current?: Settings, roles: Role[] = [], instanceGone = false): string {
   const editing = Boolean(current);
   return `<!doctype html>
 <html lang="en">
@@ -140,7 +151,7 @@ ${pageHead(editing ? `Editing ${current?.label ? escapeHtml(current.label) : "yo
   <div class="work"><main id="main" class="cfg-main" tabindex="-1"><noscript><p>Setting up BttrSubs needs JavaScript.</p></noscript></main></div>
 </div>
 ${roles.length ? '<form id="signout-form" method="post" action="/logout" hidden></form>' : ""}
-<script>window.BTTR_SETUP = ${scriptJson(setupState(current))};</script>
+<script>window.BTTR_SETUP = ${scriptJson(setupState(current, instanceGone))};</script>
 ${bubsScripts()}
 <script src="${uiUrl("usher.js")}"></script>
 <script src="${uiUrl("setup.js")}"></script>

@@ -125,6 +125,16 @@ export interface Look {
   shadow: number;
   /** Its lines' height from the bottom in script pixels when no style moves them: the plain 12 when not given. */
   margin?: number;
+  italic?: boolean;
+  /** Space added between letters, in script pixels. */
+  spacing?: number;
+  /** The lines sit at the top of the picture, not the bottom. */
+  top?: boolean;
+}
+
+/** A look's alignment as ASS numbers it: centred along the bottom (2) or along the top (8). */
+export function alignmentOf(look: Look): number {
+  return look.top ? 8 : 2;
 }
 
 /** What a plain subtitle looks like with no look chosen. */
@@ -150,7 +160,17 @@ export const LOOKS: Record<string, Look> = {
 export const FONTS: Record<string, string> = { arial: "Arial", trebuchet: "Trebuchet MS", verdana: "Verdana", tahoma: "Tahoma", georgia: "Georgia", times: "Times New Roman" };
 
 /** How far a change may take a look: outline and shadow in script pixels, size as a share of the preset's. */
-export const CHANGE_LIMITS = { outlineMax: 4, shadowMax: 4, sizeMin: 70, sizeMax: 150 };
+export const CHANGE_LIMITS = { outlineMax: 4, shadowMax: 4, sizeMin: 70, sizeMax: 150, spacingMax: 3, boxMin: 20, boxMax: 100, boxUsual: 50 };
+
+/** The letters a look's changes go by (lookOf). */
+export const CHANGE_KEYS = ["c", "o", "w", "h", "f", "g", "z", "b", "x", "i", "s", "k", "t"] as const;
+
+/**
+ * A font named by hand, as a look carries it: letters, digits and . ' - with a + for each space, 40 at
+ * most, starting with a letter or digit. A style row is split at its commas, so a name can hold none,
+ * nor anything else that would end the row or the look.
+ */
+export const FONT_NAME = /^[A-Za-z0-9][A-Za-z0-9+.'-]{0,39}$/;
 
 const HEX = /^[0-9a-f]{6}$/;
 const TENTHS = /^\d(?:\.\d)?$/;
@@ -164,16 +184,19 @@ const rgbOf = (ass: string) => `${ass.slice(-2)}${ass.slice(-4, -2)}${ass.slice(
  * The look a link's `look` names: a preset's id, or a preset ("plain" for the plain style) and its
  * changes, each a letter and its value, joined by "_" ("yellow_o0000ff_w2.4"): c the text's colour and
  * o the outline's (or the box's) as RRGGBB, w the outline and h the shadow (0 to 4, in tenths), f a font
- * (FONTS), z the size (70 to 150, percent of the preset's), b bold and x a box behind the text (0 or 1).
+ * (FONTS) or g one named by hand (FONT_NAME), not both, z the size (70 to 150, percent of the preset's), b bold, i italic and x a box behind the text
+ * (0 or 1), s the space between letters (0 to 3, in tenths), k how solid the box is (20 to 100 percent;
+ * 50 when not given), t at the top of the picture (0 or 1) and n to the left or right (l, c or r).
  * Anything else, or a letter twice, names no look.
  */
 export function lookOf(spec: string): Look | undefined {
   const [base, ...changes] = spec.split("_");
   if (Object.hasOwn(LOOKS, base) && changes.length === 0) return LOOKS[base];
   const preset = base === "plain" ? PLAIN : Object.hasOwn(LOOKS, base) ? LOOKS[base] : undefined;
-  if (!preset || changes.length === 0 || changes.length > 8) return undefined;
+  if (!preset || changes.length === 0 || changes.length > CHANGE_KEYS.length) return undefined;
   const look: Look = { ...preset };
   let outlineRgb = rgbOf(preset.outlineColour);
+  let boxSolid = CHANGE_LIMITS.boxUsual;
   const seen = new Set<string>();
   for (const change of changes) {
     const [key, value] = [change.slice(0, 1), change.slice(1)];
@@ -185,13 +208,19 @@ export function lookOf(spec: string): Look | undefined {
     else if (key === "w" && TENTHS.test(value) && n <= CHANGE_LIMITS.outlineMax) look.outline = n;
     else if (key === "h" && TENTHS.test(value) && n <= CHANGE_LIMITS.shadowMax) look.shadow = n;
     else if (key === "f" && Object.hasOwn(FONTS, value)) look.font = FONTS[value];
+    else if (key === "g" && FONT_NAME.test(value) && !seen.has("f")) look.font = value.replace(/\+/g, " ");
     else if (key === "z" && /^\d{2,3}$/.test(value) && n >= CHANGE_LIMITS.sizeMin && n <= CHANGE_LIMITS.sizeMax) look.size = Math.round(preset.size * n) / 100;
     else if (key === "b" && FLAG.test(value)) look.bold = value === "1";
     else if (key === "x" && FLAG.test(value)) look.border = value === "1" ? 3 : 1;
+    else if (key === "i" && FLAG.test(value)) look.italic = value === "1";
+    else if (key === "s" && TENTHS.test(value) && n <= CHANGE_LIMITS.spacingMax) look.spacing = n;
+    else if (key === "k" && /^\d{2,3}$/.test(value) && n >= CHANGE_LIMITS.boxMin && n <= CHANGE_LIMITS.boxMax) boxSolid = n;
+    else if (key === "t" && FLAG.test(value)) look.top = value === "1";
     else return undefined;
   }
-  // A box is half see-through, as Dark box's; an outline is solid.
-  look.outlineColour = assColour(outlineRgb, look.border === 3 ? "80" : "00");
+  // A box is half see-through, as Dark box's, unless the look says how solid; an outline is solid.
+  const seeThrough = Math.round((255 * (100 - boxSolid)) / 100).toString(16).padStart(2, "0");
+  look.outlineColour = assColour(outlineRgb, look.border === 3 ? (boxSolid === CHANGE_LIMITS.boxUsual ? "80" : seeThrough) : "00");
   return look;
 }
 
@@ -202,7 +231,7 @@ export function usualUpOf(look: Look | undefined): number {
 
 /** The look's style row, for the Default style, with its lines `margin` up from the bottom. */
 function styleRow(look: Look, margin: number): string {
-  return `Style: Default,${look.font},${look.size},${look.colour},&H000000FF,${look.outlineColour},${look.backColour},${look.bold ? -1 : 0},0,0,0,100,100,0,0,${look.border},${look.outline},${look.shadow},2,10,10,${margin},1`;
+  return `Style: Default,${look.font},${look.size},${look.colour},&H000000FF,${look.outlineColour},${look.backColour},${look.bold ? -1 : 0},${look.italic ? -1 : 0},0,0,100,100,${look.spacing ?? 0},0,${look.border},${look.outline},${look.shadow},${alignmentOf(look)},10,10,${margin},1`;
 }
 /** Inline placement other than at the bottom: \pos, \move, or \an4 to \an9 (middle and top). */
 const PLACED_ELSEWHERE = /\\(?:pos|move)\(|\\an[4-9]/;

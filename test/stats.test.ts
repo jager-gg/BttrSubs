@@ -92,7 +92,7 @@ describe("usage and health", () => {
     expect(data.configs.find((c) => c.id === "1234abcd/ab12cd")).toMatchObject({
       known: true,
       languages: ["English Dub", "Arabic"],
-      sources: ["SubSource", "OpenSubtitles", "TheSubtitleDB", "Gestdown", "Anime Tosho"],
+      sources: ["SubSource", "OpenSubtitles", "TheSubtitleDB", "Gestdown", "Anime Tosho", "TsukiHime", "aninzb"],
       hearingImpaired: "exclude",
       aiostreams: null
     });

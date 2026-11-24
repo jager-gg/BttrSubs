@@ -20,12 +20,20 @@ type Counters = Record<string, number>;
 const DAY = 86_400_000;
 
 const sum = (c: Counters, prefix: string, suffix = "") => Object.entries(c).reduce((t, [k, v]) => (k.startsWith(prefix) && k.endsWith(suffix) && k !== "lastSeen" ? t + v : t), 0);
+/**
+ * Counters under "api." that aren't a call made: how long Anime Tosho's requests waited and took (ms),
+ * calls that failed or weren't made (counted beside the calls themselves), and the share of
+ * AIOStreams' calls made for a viewer's address (already in its count).
+ */
+const NOT_A_CALL = /\.(?:waitMs|answerMs|fail|stopped|heldBack|forViewer)$/;
+/** The calls made to other services in a day's counters. */
+export const apiCallsIn = (c: Counters) => Object.entries(c).reduce((t, [k, v]) => (k.startsWith("api.") && !NOT_A_CALL.test(k) ? t + v : t), 0);
 const cpuSeconds = (c: Counters) => (c["own.cpu.ms"] ?? c["cpu.ms"] ?? 0) / 1000;
 
 /** The sources in the Sources table, in order; Subtitle Cat and added addons only in a week that used them. */
-const SOURCES = ["subsource", "subdl", "wyzie", "opensubtitles", "thesubtitledb", "gestdown", "animetosho", "subtitlecat", "addons"] as const;
+const SOURCES = ["subsource", "subdl", "wyzie", "opensubtitles", "thesubtitledb", "gestdown", "animetosho", "tsukihime", "aninzb", "subtitlecat", "addons"] as const;
 /** The name a source's activity rows carry (sourceWeek's keys), by its id. */
-const ROW_NAME: Record<string, string> = { subsource: "SubSource", subdl: "SubDL", wyzie: "Wyzie Subs", opensubtitles: "OpenSubtitles", subtitlecat: "Subtitle Cat", thesubtitledb: "TheSubtitleDB", gestdown: "Gestdown", animetosho: "Anime Tosho", addons: "An added addon" };
+const ROW_NAME: Record<string, string> = { subsource: "SubSource", subdl: "SubDL", wyzie: "Wyzie Subs", opensubtitles: "OpenSubtitles", subtitlecat: "Subtitle Cat", thesubtitledb: "TheSubtitleDB", gestdown: "Gestdown", animetosho: "Anime Tosho", tsukihime: "TsukiHime", aninzb: "aninzb", addons: "An added addon" };
 
 /**
  * A free Wyzie key's requests today, of its day's limit (x-ratelimit-limit): what its last reply left
@@ -184,7 +192,7 @@ export function dashboardSettings(views: SettingView[] = settingsView()): Dashbo
     listBudgetMs: {
       group: "Lists and timing",
       label: "List time limit",
-      help: "How long a subtitle list may take before it answers with what it has. This addon's timeout in AIOStreams must be at least this plus 2,500 ms, or AIOStreams drops the whole list: Add to AIOStreams on the configure page sets it. Raise both together when lists come back short.",
+      help: "How long a subtitle list may take before it answers with what it has. This addon's timeout in AIOStreams must be at least this plus 3,000 ms, or AIOStreams drops the whole list: Add to AIOStreams on the configure page sets it. Raising this doesn't change a timeout already saved in someone's AIOStreams: each person presses Add to AIOStreams again, or sets it by hand.",
       kind: "number",
       unit: "ms",
       min: budgetLow,
@@ -346,7 +354,7 @@ export function dashboardData(raw: StatsView, now = Date.now(), anidb?: AnidbSta
     procS: sum(d.total, "proc.", ".ms") / 1000,
     lists: d.total.lists ?? 0,
     downloads: d.total.downloads ?? 0,
-    apiCalls: sum(d.total, "api.") - sum(d.total, "api.", ".fail"),
+    apiCalls: apiCallsIn(d.total),
     errors: sum(d.total, "errors.")
   }));
 

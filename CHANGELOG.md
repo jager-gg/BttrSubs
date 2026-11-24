@@ -2,6 +2,18 @@
 
 Each version is a tag (`v1.0.0`) with an image on GitHub's registry (`ghcr.io/jager-gg/bttrsubs:1.0.0`, `:1.0`, `:1` and `:latest`). Versions follow [semantic versioning](https://semver.org): a major version can need a step when upgrading, and its section says which.
 
+## [1.2.0]
+
+New: two more places to find anime subtitles, and a bigger Style step. Fixed: a subtitle that holds two episodes. Nothing to do when upgrading. A configuration saved with the new style options doesn't open in 1.1.0, so going back means making it again.
+
+- **TsukiHime and aninzb as sources:** the subtitle tracks anime releases carry, in every language you pick, and the dub's captions where a release has them. No key; both are on unless you turn them off.
+- **A pace for each service:** requests to a service that limits how often one address may ask it wait their turn, and stop for as long as the service says when it answers that it was asked too often.
+- **Style, more to change:** italics, letter spacing, the top or the bottom of the picture, how solid the box is, and any font by its name.
+- **A style for one language:** a look can apply to one language only, beside the looks for everything, a series or one title.
+- **Your file's subtitle style for every language,** where it was English only.
+- **The Style step redrawn:** the preview stays in view with the looks under it, a light and a dark scene to check a look against, a line of your own to try, and Reset in the heading.
+- **A subtitle that holds two episodes** is timed by the part that is the playing file's, where it was sent as it came.
+
 ## [1.1.0]
 
 New: a check of a file's own subtitle track against its voices, timing that starts before the slowest source answers, and more languages to pick in Setup. Fixed: timing changes placed in too short a pause, lines shown together, and files and packs that weren't found or opened. Nothing to do when upgrading: subtitles are timed again the next time they are played.

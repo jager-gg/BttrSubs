@@ -4,7 +4,7 @@
  * which stay the defaults: each setting comes from the dashboard, else .env, else its default, and
  * resetting one on the dashboard goes back to .env or the default.
  *
- * CONFIG_SECRET, ADMIN_PASSWORD, PUBLIC_BASE_URL, CACHE_DIR and PORT are never changed here: the
+ * CONFIG_SECRET, ADMIN_PASSWORD, PUBLIC_BASE_URL, CACHE_DIR, CAPTIONS_DIR and PORT are never changed here: the
  * dashboard only says whether .env sets them.
  *
  * Every value is checked as config.ts reads it (the same parsers), and refused when config.ts would

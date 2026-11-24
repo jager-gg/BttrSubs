@@ -714,8 +714,8 @@ export function noteError(where: string, error: unknown, what?: string): void {
   dirty = true;
 }
 
-/** Error and failure counters: what a clear starts again from zero. */
-const errorish = (key: string) => key.startsWith("errors.") || key.endsWith(".fail");
+/** Error and failure counters, and the playing files a list didn't hold (the Errors page counts those too): what a clear starts again from zero. */
+const errorish = (key: string) => key.startsWith("errors.") || key.endsWith(".fail") || key === "sync.unlisted" || key === "sync.unlistedRecovered";
 
 /**
  * Clears the errors, everywhere on the dashboard: from now on only errors after this moment count, in

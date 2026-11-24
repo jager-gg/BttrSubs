@@ -89,6 +89,7 @@
 .per-fixed { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0; }
 .per-fixed b { font-size: 18px; }
 .per-fixed span { color: var(--smoke); font-size: 13.5px; }
+.per-note { margin: 6px 0 0; color: var(--smoke); font-size: 13.5px; text-wrap: pretty; }
 /* The changes to a look: a closed panel under it, its controls in a grid that stacks on phones. */
 .style-changes { border: 1px solid var(--rule); border-radius: 3px; }
 .style-changes summary { cursor: pointer; display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 44px; font-weight: 650; list-style: none; }
@@ -98,12 +99,44 @@
 .change-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 14px 20px; padding: 6px 12px 14px; align-items: start; }
 .change { display: grid; gap: 6px; font-size: 13.5px; color: var(--smoke); min-width: 0; }
 .change output { color: var(--text); font-variant-numeric: tabular-nums; }
+.change-note { font-size: 12.5px; line-height: 1.35; color: var(--smoke); text-wrap: pretty; }
+.change .field:disabled { opacity: .45; }
+.change .field[aria-invalid="true"] { border-color: var(--bad, #c0392b); }
 .change input[type="range"] { width: 100%; margin: 0; min-height: 28px; accent-color: var(--switch-on); }
 .colour { inline-size: 100%; block-size: 40px; padding: 3px; border: 1px solid var(--rule); border-radius: 3px; background: var(--sunk); cursor: pointer; }
 .style-changes .switch-row { min-height: 40px; }
-.style-changes [data-changes-clear] { margin: 0 12px 14px; }
-.look-preview { position: relative; aspect-ratio: 16 / 9; max-width: 560px; container-type: size; overflow: hidden; border-radius: 3px; background: linear-gradient(160deg, #3a3f46, #1c1f24 60%, #121417); }
+.changes-reset { appearance: none; border: 0; background: none; padding: 6px 8px; margin-right: -8px; font: inherit; font-size: 13px; font-weight: 600; color: var(--smoke); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; border-radius: 3px; }
+.changes-reset:hover { color: var(--text); }
+.change input[type="range"]:disabled { opacity: .35; }
+.style-add-btn { justify-self: start; }
+.look-preview { position: sticky; top: 12px; z-index: 3; aspect-ratio: 16 / 9; max-width: 560px; container-type: size; overflow: hidden; border-radius: 3px; box-shadow: 0 0 0 6px var(--paper); background: linear-gradient(160deg, #3a3f46, #1c1f24 60%, #121417); }
 .look-preview span { position: absolute; left: 50%; translate: -50% 0; white-space: nowrap; line-height: 1.15; }
+.look-preview[data-scene="bright"] { background: linear-gradient(170deg, #e9eef3, #c9d6e2 45%, #f3efe6 80%); }
+/* The editor: the looks as cards, each a small picture of its own line; the preview keeps its tools under it. */
+.look-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.look-card { appearance: none; display: grid; gap: 6px; padding: 6px; border: 1px solid var(--rule); border-radius: 3px; background: var(--raised); color: var(--text); font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; min-width: 0; }
+.look-card:hover { border-color: var(--rule-strong); }
+.look-card[aria-checked="true"] { border-color: var(--switch-on); box-shadow: 0 0 0 1px var(--switch-on); }
+.look-card:focus-visible { outline: 2px solid var(--focus, var(--switch-on)); outline-offset: 2px; }
+.look-card-pic { position: relative; display: block; aspect-ratio: 16 / 9; container-type: size; overflow: hidden; border-radius: 2px; background: linear-gradient(100deg, #22262c 0 50%, #c3ced9 50% 100%); box-shadow: inset 0 0 0 1px var(--rule-strong); }
+.look-card-pic span { position: absolute; white-space: nowrap; line-height: 1.15; }
+.look-card-name { padding: 0 2px 2px; line-height: 1.2; min-height: 2.4em; overflow-wrap: anywhere; }
+.preview-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.preview-tools .field { flex: 1 1 12rem; min-width: 0; }
+.change-group { border: 0; border-top: 1px solid var(--rule); margin: 0; padding: 10px 0 2px; min-width: 0; }
+.change-group legend { padding: 0 12px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--smoke); float: left; width: 100%; margin-bottom: 4px; }
+.change-group .change-grid { clear: both; }
+.change .seg, .cfg-rows .set.style-add .set-control .change .seg, .cfg-rows .set.style-add .set-control .preview-tools .seg { justify-self: start; }
+.change .stepper { justify-self: stretch; max-width: 100%; min-width: 0; }
+/* The editor takes the whole row. On a wide screen the preview and its tools stand beside the controls and stay in sight. */
+.set.style-add { grid-template-columns: minmax(0, 1fr); }
+.editor-stage { display: contents; }
+@media (min-width: 1100px) {
+  .style-editor { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); column-gap: 32px; align-items: start; }
+  .style-editor > * { grid-column: 2; }
+  .style-editor > .editor-stage { display: grid; gap: 8px; grid-column: 1; grid-row: 1 / span 12; position: sticky; top: 16px; }
+  .style-editor .look-preview { position: relative; top: auto; max-width: none; box-shadow: none; }
+}
 /* Phones: a saved addon's name takes its own line, and so does a style's place, its look, height and Remove sharing the next. */
 @media (max-width: 860px) {
   .raised li { flex-wrap: wrap; row-gap: 8px; }
@@ -117,6 +150,15 @@
   .change-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .change-grid > :not(.change-colour) { grid-column: 1 / -1; }
   .change input[type="range"], .style-changes .switch-row { min-height: 44px; }
+  /* The preview stays in sight while its controls are worked through. */
+  .look-preview { top: 8px; }
+  .look-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .style-editor > .style-pick:first-child { order: -2; }
+  .style-editor .look-cards { order: -1; }
+  .style-add-btn { justify-self: stretch; }
+  .look-card { min-height: 44px; }
+  .change .seg button { height: 40px; }
+  .preview-tools .seg button { height: 40px; }
   .style-row .style-where { grid-column: 1 / -1; }
 }
 
@@ -358,3 +400,4 @@ html.calm *, html.calm *::before, html.calm *::after { animation-delay: 0s !impo
 .tag.warn { appearance: none; background: transparent; border-color: var(--oxblood); color: var(--oxblood); font-family: var(--sans); cursor: pointer; }
 .tag.warn:hover, .tag.warn[aria-expanded="true"] { background: var(--oxblood-soft); }
 @media (max-width: 700px) { .lbl-row .tag.warn { height: 30px; padding: 0 10px; } }
+

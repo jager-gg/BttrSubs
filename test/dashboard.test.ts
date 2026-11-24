@@ -236,6 +236,11 @@ describe("settings", () => {
     expect(view("addonPassword").source).toBe("default");
   }, 20000);
 
+  it("count a day's API calls as calls: not the milliseconds Anime Tosho's requests took, nor failures or a share counted twice", async () => {
+    const { apiCallsIn } = await import("../src/dashboardData.js");
+    expect(apiCallsIn({ "api.animetosho": 55, "api.animetosho.waitMs": 165_380, "api.animetosho.answerMs": 101_208, "api.subsource": 53, "api.subsource.fail": 2, "api.aiostreams": 29, "api.aiostreams.forViewer": 29, "api.aiostreams.jellyfin": 3, "api.opensubtitles.own": 11, "api.anidb": 4, "api.anidb.heldBack": 1, "api.anidb.stopped": 1, lists: 29 })).toBe(55 + 53 + 29 + 3 + 11 + 4);
+  });
+
   it("show the .env-only settings as set or not, never their values", async () => {
     const data = await dataOf();
     expect(data.envOnly).toEqual([
@@ -243,6 +248,7 @@ describe("settings", () => {
       { env: "ADMIN_PASSWORD", set: false },
       { env: "PUBLIC_BASE_URL", set: true },
       { env: "CACHE_DIR", set: true },
+      { env: "CAPTIONS_DIR", set: false },
       { env: "PORT", set: false }
     ]);
     const page = `${await (await fetch(`${base}/dashboard`)).text()}${JSON.stringify(data)}`;
@@ -447,7 +453,7 @@ describe("the settings that were only in .env", () => {
     }
     const of = (key: string) => data.settings.find((x) => x.key === key);
     expect(of("listBudgetMs")).toMatchObject({ group: "Lists and timing", kind: "number", unit: "ms", min: 2000, max: 20_000, whole: true, value: 5000 });
-    expect(of("listBudgetMs")?.help).toContain("at least this plus 2,500 ms");
+    expect(of("listBudgetMs")?.help).toContain("at least this plus 3,000 ms");
     expect(of("privateStreamHosts")).toMatchObject({ group: "Reading files", kind: "hosts", value: "proxy.lan:8080" });
     expect(of("anidbClientVer")).toMatchObject({ group: "Anime", kind: "number", optional: true, value: "" });
     expect(of("animeTitlesDataset")).toMatchObject({ kind: "toggle", value: "on" });
@@ -919,6 +925,11 @@ describe("the errors filter", () => {
     const before = (await dataOf()).unlisted;
     stats.count("sync.unlisted");
     stats.count("sync.unlistedRecovered", 2);
+    expect((await dataOf()).unlisted).toEqual({ lost: before.lost + 1, recovered: before.recovered + 2 });
+    // Clearing the errors starts these again too, and Undo brings them back.
+    await stats.clearErrors();
+    expect((await dataOf()).unlisted).toEqual({ lost: 0, recovered: 0 });
+    await stats.undoClearErrors();
     expect((await dataOf()).unlisted).toEqual({ lost: before.lost + 1, recovered: before.recovered + 2 });
   });
 
