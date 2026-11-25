@@ -105,7 +105,7 @@ export interface SubSourceSubtitle {
 /** A subtitle that fits the request, with what the ranking needs (see matching.ts). */
 export interface RankedSubtitle extends SubSourceSubtitle {
   /** 2 for "Eng Dubbed Version", 1 for other dub tags (or any subtitle, when no dub tag is required). */
-  dubtitleScore: 1 | 2;
+  dubtitleScore: 0 | 1 | 2;
   /** Its names mark this exact episode, not just the season. */
   episodeExact: boolean;
   /** Files inside are numbered by absolute episode (e.g. a pack named "Ep1-100"). */

@@ -10,6 +10,11 @@
   const DAY = 86_400_000;
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+  // A dropdown focused from code opens on iOS (its picker comes back right after a choice): after a
+  // touch, focus put back after a panel is drawn again skips a dropdown (focusIn).
+  let byFinger = false;
+  addEventListener("pointerdown", (e) => { byFinger = e.pointerType === "touch"; }, true);
+  addEventListener("keydown", () => { byFinger = false; }, true);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   // Reduce motion: the switch in the shortcuts dialog (html.calm / html.moving), else the device's setting.
   const calmNow = () => document.documentElement.classList.contains("calm") || (!document.documentElement.classList.contains("moving") && matchMedia("(prefers-reduced-motion: reduce)").matches);
@@ -128,7 +133,7 @@
   };
   const srcImg = (name) => {
     const id = srcId(name);
-    return id && id !== "addons" ? `<img src="/sources/${id}.png?v=2" alt="" width="22" height="22">` : `<span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24">${ICONS.link}</svg></span>`;
+    return id && id !== "addons" ? `<img src="/sources/${id}.png?v=3" alt="" width="22" height="22">` : `<span class="ic" aria-hidden="true"><svg viewBox="0 0 24 24">${ICONS.link}</svg></span>`;
   };
   const srcLabel = (name) => SRC[srcId(name)] ?? name;
   const breakable = (s) => esc(s).replace(/([._\-\])])/g, "$1<wbr>");
@@ -545,7 +550,17 @@
     renderPanel("activity");
   }
   let refitting = 0;
-  const fitAgain = () => { fit.size = ""; if (state.tab === "activity") renderPanel("activity"); };
+  // A picker or keyboard opening on a phone changes the window's height: drawing the panel again then would
+  // replace the dropdown or field in use under it (iOS closes its picker with it), so the fit waits until
+  // focus leaves it.
+  let refitAfter = false;
+  const inUse = () => { const el = document.activeElement; return Boolean(el?.matches("select, input, textarea") && $("#p-activity")?.contains(el)); };
+  const fitAgain = () => {
+    if (inUse()) { refitAfter = true; return; }
+    fit.size = "";
+    if (state.tab === "activity") renderPanel("activity");
+  };
+  document.addEventListener("focusout", () => { if (refitAfter) { refitAfter = false; setTimeout(fitAgain, 0); } });
   addEventListener("resize", () => { clearTimeout(refitting); refitting = setTimeout(fitAgain, 150); });
   // Rows measured in a fallback font are a little off: measured again once the page's fonts are in.
   document.fonts?.ready.then(fitAgain);
@@ -1379,7 +1394,7 @@
     const p = $(`#p-${tab}`);
     const usable = (s) => { const el = s && $(s, p); return el && !el.disabled && el.offsetParent !== null ? el : null; };
     const target = sels.map(usable).find(Boolean) ?? $(`#h-${tab}`, p) ?? $("h1", p);
-    if (!target) return;
+    if (!target || (byFinger && target.tagName === "SELECT")) return;
     if (!target.matches("a[href], button, input, select, textarea, [tabindex]")) target.setAttribute("tabindex", "-1");
     target.focus({ preventScroll: true });
   }

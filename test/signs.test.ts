@@ -7,7 +7,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readMkvTracks } from "../src/mkv.js";
-import { DUB_STYLE, dubLines, dubStyle, mergeWithSigns, ownStyleOf, parseScript, playRes, signsOnly, STYLE_FORMAT, writeScript } from "../src/signs.js";
+import { dialogueStyleOf, DUB_STYLE, dubLines, dubStyle, MAYBE_SONG, mergeWithSigns, ownStyleOf, parseScript, playRes, signsOfFull, signsOnly, STYLE_FORMAT, writeScript } from "../src/signs.js";
 import { movesBy, startsInOrder } from "../src/signsjob.js";
 import { signsOf, videoSource } from "../src/animetosho.js";
 import { ASS_HEADER, release } from "./mkvfile.js";
@@ -318,6 +318,68 @@ describe("the playing file's own subtitle style", () => {
     const out = parseScript(mergeWithSigns({ dub: srt([["00:00:01,000", "00:00:02,000", "Hi."]]), ext: ".srt", own }).text)!;
     expect(playRes(out)).toEqual({ x: 1280, y: 720 });
     expect(out.styles.find((s) => s[0] === DUB_STYLE)![STYLE_FORMAT.indexOf("Fontsize")]).toBe("48");
+  });
+
+  // A typeset subtitle: dialogue, a sign, a line placed at the top over it, a song's syllable and a drawing.
+  const typeset = signsTrack([
+    "Dialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,Hello.",
+    "Dialogue: 0,0:00:03.00,0:00:06.00,Sign,,0,0,0,,{\\pos(960,120)}GUILD HALL",
+    "Dialogue: 0,0:00:03.50,0:00:05.00,Default,,0,0,0,,{\\an8}Over there!",
+    "Dialogue: 0,0:01:00.00,0:01:04.00,OP-Romaji,,0,0,0,,{\\an5\\pos(746,51)\\k20}ta",
+    "Dialogue: 1,0:01:00.00,0:01:04.00,OP-Romaji,,0,0,0,,{\\an7\\pos(10,10)\\p1}m 0 0 l 0 -24 l 1 -30{\\p0}"
+  ]);
+  const texts = (script: NonNullable<ReturnType<typeof parseScript>>, style?: string) => script.events.filter((e) => style === undefined || e.values[3] === style).map((e) => e.values[9]);
+
+  it("sends every line of a subtitle in the file's style, and leaves its drawings out, never as text", () => {
+    const own = ownStyleOf([header("English", [row("Default", "Gandhi Sans", 48)])])!;
+    const out = parseScript(mergeWithSigns({ dub: typeset, ext: ".ass", own }).text)!;
+    expect(playRes(out)).toEqual({ x: 1280, y: 720 });
+    expect(texts(out)).toEqual(["Hello.", "GUILD HALL", "{\\an8}Over there!", "{\\an5}ta"]);
+    expect(texts(out, DUB_STYLE)).toHaveLength(4);
+  });
+
+  it("of a downloaded subtitle is its own dialogue style, picked as the file's is, read from its styles alone", () => {
+    const upload = ["[Script Info]", "PlayResX: 1920", "PlayResY: 1080", "", "[V4+ Styles]", `Format: ${STYLE_FORMAT.join(", ")}`, row("Sign-Title", "Fancy", 90, 8), row("Default", "Gandhi Sans", 64), "", "[Events]", "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text", "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hi."].join("\n");
+    expect(dialogueStyleOf(upload)).toMatchObject({ playResX: 1920, playResY: 1080, style: { name: "Default", fontname: "Gandhi Sans", fontsize: "64" } });
+    expect(dialogueStyleOf("1\n00:00:01,000 --> 00:00:02,000\nHi.\n")).toBeUndefined();
+  });
+});
+
+describe("a full track's lyrics set like dialogue", () => {
+  const texts = (script: NonNullable<ReturnType<typeof parseScript>>, style: string) => script.events.filter((e) => e.values[3] === style).map((e) => e.values[9]);
+  const at =(s: number) => `0:${String(Math.floor(s / 60)).padStart(2, "0")}:${(s % 60).toFixed(2).padStart(5, "0")}`;
+  const run = (from: number, style: string, words: string) => Array.from({ length: 12 }, (_, i) => `Dialogue: 0,${at(from + i * 3.6)},${at(from + i * 3.6 + 3.4)},${style},,0,0,0,,${words} ${i + 1}`);
+  const full = signsTrack([
+    "Dialogue: 0,0:00:05.00,0:00:08.00,Sign,,0,0,0,,{\\pos(960,120)}GUILD HALL",
+    "Dialogue: 0,0:00:10.00,0:00:12.00,main,,0,0,0,,Where are we?",
+    "Dialogue: 0,0:00:13.00,0:00:15.00,main,,0,0,0,,The guild.",
+    ...run(60, "italics", "Song line"),
+    ...run(300, "italics", "Inner thought")
+  ]);
+  const dub = [
+    { start: 10, text: "Where is this?" },
+    { start: 70, text: "♪ ♪" },
+    ...Array.from({ length: 15 }, (_, i) => ({ start: 300 + i * 3, text: `Dub line ${i + 1}` }))
+  ]
+    .map(({ start, text }, i) => `${i + 1}\n00:${String(Math.floor(start / 60)).padStart(2, "0")}:${String(start % 60).padStart(2, "0")},000 --> 00:${String(Math.floor((start + 2) / 60)).padStart(2, "0")}:${String((start + 2) % 60).padStart(2, "0")},000\n${text}\n`)
+    .join("\n");
+
+  it("are kept from the track as maybe a song: a long run of lines in one style, beside its signs; short runs go", () => {
+    const signs = signsOfFull(parseScript(full)!);
+    expect(texts(signs, "Sign")).toEqual(["{\\pos(960,120)}GUILD HALL"]);
+    expect(texts(signs, "main")).toEqual([]);
+    expect(signs.events.filter((e) => e.values[3] === "italics").map((e) => e.values[8])).toEqual(Array(24).fill(MAYBE_SONG));
+  });
+
+  it("show as a song where the dub is quiet over them, its placeholder left out, and go where the dub speaks", () => {
+    const stored = parseScript(writeScript(signsOfFull(parseScript(full)!)))!;
+    const merged = mergeWithSigns({ dub, ext: ".srt", signs: stored });
+    const out = parseScript(merged.text)!;
+    expect(texts(out, "italics")).toEqual(Array.from({ length: 12 }, (_, i) => `Song line ${i + 1}`));
+    expect(out.events.every((e) => e.values[8] === "")).toBe(true);
+    expect(merged.lyrics).toBe(12);
+    expect(merged.dropped.dubSongs).toBe(1);
+    expect(texts(out, DUB_STYLE)).toEqual(["Where is this?", ...Array.from({ length: 15 }, (_, i) => `Dub line ${i + 1}`)]);
   });
 });
 

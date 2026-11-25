@@ -58,6 +58,7 @@ npm run negatives    # every file against every subtitle that isn't its own: non
 | `src/vad.ts`, `src/vad-worker.ts`, `src/turns.ts` | Speech in the audio (Silero VAD), and whose turn it is to hear a file |
 | `src/reads.ts`, `src/net.ts`, `src/viewers.ts` | Where a file may be read from, pausing when its host refuses, the daily read limit; fetching addresses a third party gave |
 | `src/signs.ts`, `src/signsjob.ts` | Signs & songs with English Dub, and the playing file's own subtitle style |
+| `src/respace.ts`, `src/fontwidths.ts` | Songs set piece by piece laid out again in a font players have, and those fonts' letter widths |
 | `src/srt.ts`, `src/clean.ts`, `src/text.ts`, `src/langcodes.ts` | Formats sent, sound descriptions taken out, text encodings, language codes |
 | `src/cache.ts`, `src/cleanup.ts`, `src/logs.ts` | The on-disk cache, what leaves it, and the log files |
 | `src/stats.ts`, `src/dashboardData.ts`, `src/statsPage.ts`, `src/diagnostics.ts` | The dashboard: its numbers, the data its page draws, the page, and Copy diagnostics |

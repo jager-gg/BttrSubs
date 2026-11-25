@@ -77,8 +77,14 @@ export const ID = {
  * between 4.2 and 43.9 KB, and 64 KB read in 8-110 ms where 512 KB took 13-209 ms.
  */
 const HEAD_BYTES = 64 * 1024;
-/** Read on to this when the header runs past HEAD_BYTES, then parsed as it is. */
+/** Read on to this at least when the header runs past HEAD_BYTES, then parsed as it is. */
 const LONG_HEAD_BYTES = 512 * 1024;
+/**
+ * Read on as far as the header's SeekHead, Info and Tracks say they end, up to this. Calibration (a
+ * release whose ASS tracks carry hundreds of sign styles in their headers): its Tracks ended at
+ * 662,797 B, past LONG_HEAD_BYTES, and the file went unsynced.
+ */
+const MAX_HEAD_BYTES = 2 * 1024 * 1024;
 /** An index bigger than this isn't read (a long film's runs to a few MB). */
 const MAX_CUES_BYTES = 24 * 1024 * 1024;
 /** An index entry without a duration: lines run this long, or to the next line, whichever is sooner. */
@@ -375,10 +381,25 @@ export async function readHead(url: string, timeoutMs: number): Promise<Head | u
   if (!parsed) return undefined;
   const ending = (p: Omit<Head, "bytesRead">) => p.cuesEnd ?? (p.cuesAt !== undefined ? first.size : undefined);
   if (parsed.whole || first.bytes.length < HEAD_BYTES) return { ...parsed, cuesEnd: ending(parsed), bytesRead: first.readHere };
-  // A header that runs past the first read: read on to LONG_HEAD_BYTES, so the common short header costs one small read.
-  const longer = await fileHead(url, timeoutMs, LONG_HEAD_BYTES);
+  // A header that runs past the first read: read on to where its parts end (at least LONG_HEAD_BYTES, at
+  // most MAX_HEAD_BYTES), so the common short header costs one small read and a long one a second.
+  const longer = await fileHead(url, timeoutMs, Math.min(MAX_HEAD_BYTES, Math.max(LONG_HEAD_BYTES, headEnd(first.bytes) ?? 0)));
   const again = parseHead(longer.bytes);
   return again && { ...again, cuesEnd: ending(again), bytesRead: first.readHere + longer.readHere };
+}
+
+/** Where the header's SeekHead, Info and Tracks end in the file, by the sizes they declare (read or not), before the first Cluster. */
+function headEnd(head: Uint8Array): number | undefined {
+  const segment = children(head, 0, head.length).find((e) => e.id === ID.Segment);
+  if (!segment) return undefined;
+  let end = 0;
+  for (const e of children(head, segment.start, head.length)) {
+    if (e.id === ID.Cluster) break;
+    if (e.id !== ID.SeekHead && e.id !== ID.Info && e.id !== ID.Tracks) continue;
+    const size = vint(head, e.at + (vint(head, e.at, true)?.length ?? 0), false);
+    if (size && !size.unknown) end = Math.max(end, e.start + size.value);
+  }
+  return end || undefined;
 }
 
 /** The header in a file's first bytes; whole: SeekHead, Info and Tracks are all in them, or the first Cluster is. */

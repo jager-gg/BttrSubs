@@ -81,6 +81,56 @@ describe("a file numbered with no season, found as the anime numbers its episode
     expect(await sync.lookUpStreamAgain(AIO, "tt0000902:3:1", "series", "[Group] Show 051 [BD 1080p].mkv", [1])).toBeUndefined();
     expect(asked).toEqual(["tt0000902:3:1", "tt0000902:3:1"]);
   });
+
+  it("asks for the Kitsu episode for a file named with its season too: a player that lists anime by Kitsu ids chose from that list", async () => {
+    const sync = await import("../src/sync.js");
+    sync.forgetStreams();
+    const AIO = "http://aiostreams:3000/stremio/uuid/pass/manifest.json";
+    const PLAYED = "Show - S02E12 - 037 [1080p][JA+EN]-TEAM";
+    const lists: Record<string, string[]> = { "tt0000902:2:12": ["Show.S02E12.1080p.BluRay.x265-CREW"], "kitsu:900:37": ["Show.S02E12.1080p.BluRay.x265-CREW", PLAYED] };
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL) => {
+      const url = new URL(String(input));
+      const list = animeList(url);
+      if (list) return list;
+      const stream = /\/stream\/series\/(.+)\.json$/.exec(decodeURIComponent(url.pathname));
+      if (stream) {
+        asked.push(stream[1]);
+        return json({ streams: (lists[stream[1]] ?? []).map((filename) => ({ url: `https://debrid.example/${encodeURIComponent(filename)}`, behaviorHints: { filename } })) });
+      }
+      return new Response("x", { status: 200 });
+    });
+    expect(await sync.lookUpStreamAgain(AIO, "tt0000902:2:12", "series", PLAYED, [1])).toBe(`https://debrid.example/${encodeURIComponent(PLAYED)}`);
+    expect(asked).toEqual(["tt0000902:2:12", "kitsu:900:37"]);
+    // A file its own list holds is taken there, and the Kitsu episode isn't asked for.
+    asked.length = 0;
+    sync.forgetStreams();
+    expect(await sync.lookUpStreamAgain(AIO, "tt0000902:2:12", "series", "Show.S02E12.1080p.BluRay.x265-CREW", [1])).toBeDefined();
+    expect(asked).toEqual(["tt0000902:2:12"]);
+  });
+
+  it("asks only by the id it was given for a title the anime lists don't hold", async () => {
+    const sync = await import("../src/sync.js");
+    sync.forgetStreams();
+    const AIO = "http://aiostreams:3000/stremio/uuid/pass/manifest.json";
+    const asked: string[] = [];
+    const lists: Record<string, string[]> = { "kitsu:900:37": ["Show - S02E12 - 037-TEAM"], "tt0000950:1:3": ["Other.Show.S01E03.1080p.WEB-CREW"] };
+    vi.stubGlobal("fetch", async (input: string | URL) => {
+      const url = new URL(String(input));
+      const list = animeList(url);
+      if (list) return list;
+      const stream = /\/stream\/series\/(.+)\.json$/.exec(decodeURIComponent(url.pathname));
+      if (stream) {
+        asked.push(stream[1]);
+        return json({ streams: (lists[stream[1]] ?? []).map((filename) => ({ url: `https://debrid.example/${encodeURIComponent(filename)}`, behaviorHints: { filename } })) });
+      }
+      return new Response("x", { status: 200 });
+    });
+    expect(await sync.lookUpStreamAgain(AIO, "tt0000902:2:12", "series", "Show - S02E12 - 037-TEAM", [1])).toBeDefined();
+    asked.length = 0;
+    expect(await sync.lookUpStreamAgain(AIO, "tt0000950:1:3", "series", "Other.Show.S01E03.1080p.WEB-CREW", [1])).toBeDefined();
+    expect(asked).toEqual(["tt0000950:1:3"]);
+  });
 });
 
 describe("an episode counted across seasons", () => {

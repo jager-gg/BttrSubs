@@ -242,3 +242,28 @@ describe("the episode on screen", () => {
     expect(episodeOnScreen("[Group] Show 037 [BD 1080p].mkv", undefined, 2)).toBeUndefined();
   });
 });
+
+describe("a subtitle made for a release named as a dub", () => {
+  const forDubbed = sub({ subtitleId: 11, releaseInfo: ["show.s01e05.dubbed.hdtv.x264-team"] });
+  const forDub = sub({ subtitleId: 16, releaseInfo: ["[Group] Show - 05 [Dub][1080p]"] });
+  const called = sub({ subtitleId: 12, releaseInfo: ["Show S01E05 English Dub"] });
+  const translation = sub({ subtitleId: 13, releaseInfo: ["Show.S01E05.1080p.WEB-DL-GROUP"] });
+  const request = { ...episodeOf(1, 5), filename: "Show.S01E05.1080p.BluRay.x265-CREW.mkv" };
+
+  it("is dub captions for the dub track, whatever the playing file is, after every one an uploader calls the dub's", () => {
+    const ranked = filterAndRankDubtitles([translation, forDubbed, forDub, called], request, { releaseDub: true }).map((s) => s.subtitleId);
+    expect(ranked[0]).toBe(12);
+    expect(ranked.slice(1).sort()).toEqual([11, 16]);
+    expect(filterAndRankDubtitles([forDubbed], episodeOf(1, 5), { releaseDub: true }).map((s) => s.subtitleId)).toEqual([11]);
+  });
+
+  it("isn't one where the dub track isn't being picked, so regular English keeps it", () => {
+    expect(filterAndRankDubtitles([translation, forDubbed, forDub, called], request).map((s) => s.subtitleId)).toEqual([12]);
+  });
+
+  it("goes by the release's name alone: not a word in the note, nor part of another word", () => {
+    const inNote = sub({ subtitleId: 14, releaseInfo: ["Show.S01E05.WEB-GROUP"], commentary: "also fits the dubbed copy" });
+    const inWord = sub({ subtitleId: 15, releaseInfo: ["Show.S01E05.Redubbed-GROUP"] });
+    expect(filterAndRankDubtitles([inNote, inWord], request, { releaseDub: true })).toEqual([]);
+  });
+});

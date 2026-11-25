@@ -185,16 +185,18 @@ describe("finding the playing file in AIOStreams", () => {
   });
 
   it("asks again when the file isn't in the first list, and stops once it is found", async () => {
-    const fetch = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementationOnce(async () => list("Show.S01E07.720p.WEB.h264-CREW"))
-      .mockImplementationOnce(async () => list("Show.S01E07.720p.WEB.h264-CREW", `${PLAYED}.mkv`))
-      .mockImplementation(async () => list());
+    // AIOStreams' lists in turn; anything else asked for on the way (the anime lists) isn't there.
+    let asked = 0;
+    const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      if (!String(input).includes("/stream/")) return new Response("", { status: 404 });
+      asked += 1;
+      return asked === 1 ? list("Show.S01E07.720p.WEB.h264-CREW") : asked === 2 ? list("Show.S01E07.720p.WEB.h264-CREW", `${PLAYED}.mkv`) : list();
+    });
     expect(await lookUpStreamAgain(AIO, "tt0000005:1:7", "series", PLAYED, [1, 1])).toBe(stream(`${PLAYED}.mkv`).url);
     expect(lists(fetch)).toBe(2);
   });
 
-  it("asks no other list for a file its name places by season and episode, or for a film", async () => {
+  it("asks no other list for a title the anime lists don't hold, or for a film", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => list());
     expect(await lookUpStreamAgain(AIO, "tt1:2:12", "series", "Show.S02E12.1080p.WEB-TEAM.mkv", [1, 1])).toBeUndefined();
     expect(await lookUpStreamAgain(AIO, "tt1", "movie", "Film 2020.mkv", [1, 1])).toBeUndefined();

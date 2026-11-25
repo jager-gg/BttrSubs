@@ -110,11 +110,24 @@ const PARTIAL = /\b(forced|signs?|songs?|s&s|karaoke|typeset)\b/i;
 /** A track named as captions of what is said: the dub's, on a release with English voices. */
 const CAPTIONS = /\b(cc|sdh|closed|captions?|dub|dubtitles?)\b/i;
 
+/** Whether a season and episode a name gives are this episode's: its own, or the episode's number across the show under season 1 or none. */
+const sameEpisode = (m: { season: number; episode: number }, request: StremioSubtitleRequest) =>
+  (m.season === request.season && m.episode === request.episode) || (request.absoluteEpisode !== undefined && m.season <= 1 && m.episode === request.absoluteEpisode);
+
 /** Whether a file's name is this episode's: by a season and episode it gives, or by the episode's number across the show. */
 function isEpisode(name: string, request: StremioSubtitleRequest): boolean {
+  return extractEpisodeMarkers(name).some((m) => sameEpisode(m, request));
+}
+
+/**
+ * Whether a name gives a season and episode and none of them is this one: a release the service files
+ * under the episode by its number alone ("Show 130 - S03E28" under episode 28) may be another
+ * episode's, or one that numbers its seasons another way. A name with no season and episode
+ * ("Show - 28") says nothing either way.
+ */
+function namesAnotherEpisode(name: string, request: StremioSubtitleRequest): boolean {
   const markers = extractEpisodeMarkers(name);
-  if (markers.length === 0) return false;
-  return markers.some((m) => (m.season === request.season && m.episode === request.episode) || (request.absoluteEpisode !== undefined && m.season <= 1 && m.episode === request.absoluteEpisode));
+  return markers.length > 0 && !markers.some((m) => sameEpisode(m, request));
 }
 
 const bare = (name: string) => name.toLowerCase().replace(/\.(mkv|mp4|avi)$/, "");
@@ -127,7 +140,9 @@ async function episodeReleases(request: StremioSubtitleRequest, showName: string
     const id = anime?.id ?? anime?.anime?.id ?? anime?.results?.[0]?.id;
     if (id) {
       const listed = await getJson<{ results?: Release[] }>(`/animes/${id}/episodes/${placed.episode}?limit=100`, EPISODE_TTL_S);
-      if (listed?.results?.length) return listed.results;
+      // The ones whose names give another episode go last, so they take a place only when no other release wants it.
+      const all = listed?.results ?? [];
+      if (all.length) return [...all.filter((r) => !namesAnotherEpisode(r.name, request)), ...all.filter((r) => namesAnotherEpisode(r.name, request))];
     }
   }
   if (!showName || request.season === undefined || !request.episode) return [];

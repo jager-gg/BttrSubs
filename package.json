@@ -1,6 +1,6 @@
 {
   "name": "bttr-subs",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Smooth, buttery subtitles, synced better to your file: a self-hosted Stremio subtitle addon for AIOStreams, with English dub captions and other languages.",
   "type": "module",
   "main": "dist/server.js",

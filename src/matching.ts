@@ -22,6 +22,19 @@ export function dubtitlePhraseScore(value: string): 0 | 1 | 2 {
   return DUB_LOOSE.some((tag) => text.includes(tag)) ? 1 : 0;
 }
 
+/** "DUB" or "DUBBED" as a tag of its own in a release's name: the release is a dub. */
+const DUB_RELEASE = /(?:^|[\s._\-[(])dub(?:bed)?(?:$|[\s._\-\])])/i;
+
+/**
+ * Whether a subtitle was made for a release named as a dub: its words are the dub's, whatever the
+ * uploader says of the subtitle itself. A weaker claim than an uploader calling the subtitle the
+ * dub's (dubtitlePhraseScore): it names the release, and such a release can be another cut than the
+ * playing file. Whether it fits that file is the sync's to say, against the file's voices.
+ */
+export function madeForDubbedRelease(subtitle: SubSourceSubtitle): boolean {
+  return (subtitle.releaseInfo ?? []).some((name) => DUB_RELEASE.test(name));
+}
+
 /** Everything the uploader wrote about a subtitle, as one string to search. */
 function searchableText(subtitle: SubSourceSubtitle): string {
   const said = [
@@ -742,7 +755,7 @@ export function releaseMatch(subtitle: SubSourceSubtitle, filename?: string): nu
 export function filterAndRankDubtitles(
   subtitles: SubSourceSubtitle[],
   request: StremioSubtitleRequest,
-  options: { requireDub?: boolean; allowMachine?: boolean; hearingImpaired?: "include" | "exclude" | "only"; seasonMap?: SeasonMap } = {}
+  options: { requireDub?: boolean; releaseDub?: boolean; allowMachine?: boolean; hearingImpaired?: "include" | "exclude" | "only"; seasonMap?: SeasonMap } = {}
 ): RankedSubtitle[] {
   const requireDub = options.requireDub ?? true;
   const hearingImpaired = options.hearingImpaired ?? "include";
@@ -751,7 +764,9 @@ export function filterAndRankDubtitles(
   const fitting = subtitles.flatMap((subtitle): RankedSubtitle[] => {
     const text = searchableText(subtitle);
     const phrase = dubtitlePhraseScore(text);
-    if (requireDub && phrase === 0) return [];
+    // With `releaseDub`, a subtitle made for a dubbed release counts as dub captions too, after every one an uploader calls so.
+    const byRelease = phrase === 0 && options.releaseDub === true && madeForDubbedRelease(subtitle);
+    if (requireDub && phrase === 0 && !byRelease) return [];
     const byTitle = readByTitle(subtitle, request, options.seasonMap, mixed?.has(subtitle.movieId) ?? false);
     // From a record found by the season's name, only what its own names place on this episode
     // through the season map: nothing else says the record is this show's. A film's record also
@@ -788,7 +803,7 @@ export function filterAndRankDubtitles(
         quality,
         ...(tier === -1 ? { machine: true } : {}),
         ...(otherSeason ? { otherSeason: true } : {}),
-        dubtitleScore: phrase === 2 ? 2 : 1,
+        dubtitleScore: phrase === 2 ? 2 : byRelease ? 0 : 1,
         releaseMatch: releaseMatch(subtitle, request.filename),
         editionFit: editionFit(subtitle, request.filename),
         episodeExact: byTitle

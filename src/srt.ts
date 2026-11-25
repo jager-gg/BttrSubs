@@ -306,18 +306,17 @@ function raiseAss(text: string, percent: number): string {
 
 /**
  * The subtitle as ASS, for a link ending in ".ass" (one that keeps ASS styling, or a style's look or
- * height, Settings.styles). An ASS or SSA script keeps its styles and positions (`own`, true unless a
- * look is to take their place); raised, its bottom-placed lines move up to that share of the
- * picture's height (raiseAss). Anything else (an SRT or VTT, one served in an ASS upload's place, or
- * an ASS script whose styling gives way to a look) becomes a script with one style, the look's or the
- * plain one, placed that high when raised; a line tagged for the top ({\an8}) stays at the default
- * top margin.
+ * height, Settings.styles). An ASS or SSA script keeps its styles and positions with `own` (Keep the
+ * subtitle's own styling); raised, its bottom-placed lines move up to that share of the picture's
+ * height (raiseAss). Anything else (an SRT or VTT, one served in an ASS upload's place, or an ASS
+ * script without `own`) becomes a script with one style, the look's or the plain one, placed that high
+ * when raised; a line tagged for the top ({\an8}) stays at the default top margin.
  */
 export function toAss(text: string, ext: string, raise?: number, look?: string, own = true): string {
   const kind = ext.toLowerCase();
   const styled = kind === ".ass" || kind === ".ssa";
   const chosen = look !== undefined ? lookOf(look) : undefined;
-  if (styled && (own || !chosen)) return raise ? raiseAss(text, raise) : text;
+  if (styled && own) return raise ? raiseAss(text, raise) : text;
   const lines = (styled ? fromAss(text) : fromVtt(text)).filter((l) => l.end > l.start).sort((x, y) => x.start - y.start);
   const margin = raise ? Math.round((PLAIN_HEIGHT * raise) / 100) : (chosen?.margin ?? PLAIN_MARGIN);
   return [

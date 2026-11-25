@@ -90,7 +90,7 @@ export function writeScript(script: Script): string {
   ].join("\n");
 }
 
-const at = (format: string[], name: string) => format.findIndex((f) => f.toLowerCase() === name.toLowerCase());
+export const at = (format: string[], name: string) => format.findIndex((f) => f.toLowerCase() === name.toLowerCase());
 
 /** An info line's value ("PlayResY" -> "1080"). */
 export function infoValue(script: Script, key: string): string | undefined {
@@ -159,6 +159,12 @@ export function ownStyleOf(tracks: Array<{ type: string; language: string; name:
     return { playResX: x, playResY: y, style: Object.fromEntries(script.styleFormat.map((f, i) => [f.toLowerCase(), row[i] ?? ""])) };
   }
   return undefined;
+}
+
+/** A downloaded ASS subtitle's own dialogue style, picked as the file's is (ownStyleOf); none for a script with no styles. */
+export function dialogueStyleOf(text: string): OwnStyle | undefined {
+  const events = text.search(/^\[Events\]/im);
+  return ownStyleOf([{ type: "subtitle", language: "", name: "", forced: false, default: true, assHeader: events > 0 ? text.slice(0, events) : text }]);
 }
 
 // ---------- the dub's style ----------
@@ -230,6 +236,8 @@ export function dubLines(text: string, ext: string): DubLine[] {
     for (const ev of script.events) {
       if (ev.kind !== "Dialogue") continue;
       const raw = ev.values[tx] ?? "";
+      // Vector drawings ({\p1}) are shapes, not words.
+      if (/\{[^}]*\\p[1-9]/.test(raw)) continue;
       const lineText = keptTags(raw).replace(/\\h/g, " ").trim();
       const plain = plainOf(raw);
       if (!plain) continue;
@@ -277,6 +285,54 @@ export interface MergeResult {
   text: string;
   /** The dub's lines left out as the signs' own copies, its song placeholders, and the release's song lines the dub sings itself. */
   dropped: { dubSigns: number; dubSongs: number; songs: number; heavy?: number; plained?: number };
+  /** A full track's lines taken as a song's lyrics, the dub quiet over them. */
+  lyrics?: number;
+}
+
+/**
+ * The Effect a full track's line carries in its signs (signsOfFull) while it may be a song's lyrics set
+ * like dialogue: no song style, ♪, karaoke or placement. The merge decides, and clears it.
+ */
+export const MAYBE_SONG = "bttrsubs-maybe-song";
+/**
+ * A run of a full track's lines in one style, each starting within LYRIC_RUN_GAP_MS of the last one's
+ * end, with at least LYRIC_RUN_LINES lines over LYRIC_RUN_MS, may be a song's lyrics. Calibration (9
+ * episodes of one release, its lyrics in an "italics" style its italic dialogue shares): its openings
+ * ran 19 lines over 65 to 66 s and its endings 18 over 61 s; dialogue in one style ran up to 71 lines.
+ */
+const LYRIC_RUN_LINES = 8;
+const LYRIC_RUN_MS = 40_000;
+const LYRIC_RUN_GAP_MS = 8000;
+/**
+ * A run is a song's where the dub speaks at most this many lines a minute over it (♪ lines aside), a
+ * dub line counted when at least half of it falls in the run. Calibration (the same 9 episodes against
+ * their dub captions): 0 over each of the 16 openings and endings, 14.1 to 25.6 over the 59 runs of
+ * dialogue, the 18 italic lines of one included.
+ */
+const QUIET_LINES_PER_MIN = 2;
+
+/** Runs of lines in one style, each starting within LYRIC_RUN_GAP_MS of the last one's end, by start. */
+function runsOf<T extends { start: number; end: number; style: string }>(items: T[]): T[][] {
+  const runs: T[][] = [];
+  for (const x of [...items].sort((a, b) => a.start - b.start)) {
+    const run = runs[runs.length - 1];
+    const last = run?.[run.length - 1];
+    if (last && x.style === last.style && x.start - last.end <= LYRIC_RUN_GAP_MS) run.push(x);
+    else runs.push([x]);
+  }
+  return runs;
+}
+
+/** The lines that may be a song's lyrics, kept as a song where the dub is quiet over their run. */
+function lyricsWhereQuiet(maybe: Shown[], styleAt: number, lines: DubLine[]): Set<Shown> {
+  const sung = new Set<Shown>();
+  for (const run of runsOf(maybe.map((x) => ({ x, start: x.start, end: x.end, style: x.ev.values[styleAt] ?? "" })))) {
+    const from = run[0].start;
+    const to = Math.max(...run.map((r) => r.end));
+    const spoken = lines.filter((l) => !/♪/.test(l.plain) && overlap(l, { start: from, end: to }) * 2 >= l.end - l.start).length;
+    if (spoken <= (QUIET_LINES_PER_MIN * (to - from)) / 60_000) for (const r of run) sung.add(r.x);
+  }
+  return sung;
 }
 
 /** A lyric line's copies no further apart than this are one showing of it; further, the line is sung again. */
@@ -308,9 +364,9 @@ function edgeAnchored(place: string, size: number, height: number): string {
   return place;
 }
 
-const SERIF_FONT = /mincho|(?<!sans[ -]?)serif|roman|times|georgia|garamond|baskerville|caslon|bodoni|didot|minion|palatino|cambria|antiqua|slab/i;
-const SANS_FONT = /sans|gothic|grotesk|grotesque|helvet|futura|roboto|lato|montserrat|open ?sans|noto|inter\b|avenir|franklin|myriad|segoe|calibri/i;
-const HEAVY_FONT = /bold|black|heavy|ultra/i;
+export const SERIF_FONT = /mincho|(?<!sans[ -]?)serif|roman|times|georgia|garamond|baskerville|caslon|bodoni|didot|minion|palatino|cambria|antiqua|slab/i;
+export const SANS_FONT = /sans|gothic|grotesk|grotesque|helvet|futura|roboto|lato|montserrat|open ?sans|noto|inter\b|avenir|franklin|myriad|segoe|calibri/i;
+export const HEAVY_FONT = /bold|black|heavy|ultra/i;
 
 /**
  * The tags that put a plain lyric line in a font most players have, of the kind its song's font is by
@@ -414,6 +470,9 @@ export const MAX_MERGED_BYTES = 4_500_000;
  * whole styles, the songs' first and the heaviest first, until it fits: a song keeps its lyric lines
  * without their effects (plainLyrics), or goes when it has no whole lines; a sign style goes. The
  * dub's lines always stay, and a sign style is all there or all gone, never half a sign.
+ *
+ * A full track's lines that may be a song's lyrics (MAYBE_SONG, signsOfFull) are its song lines where
+ * the dub is quiet over them (lyricsWhereQuiet), and go where the dub speaks.
  */
 export function mergeWithSigns({ dub, ext, signs, own, look, raise, maxBytes }: { dub: string; ext: string; signs?: Script; own?: OwnStyle; look?: Look; raise?: number; maxBytes?: number }): MergeResult {
   const base: Script = signs
@@ -431,8 +490,20 @@ export function mergeWithSigns({ dub, ext, signs, own, look, raise, maxBytes }: 
 
   let lines = dubLines(dub, ext);
   const dropped: MergeResult["dropped"] = { dubSigns: 0, dubSongs: 0, songs: 0 };
+  let sungLines = 0;
   if (signs) {
     lines = lines.filter((l) => !l.sign);
+    const fx = at(base.eventFormat, "Effect");
+    const maybe = fx < 0 ? [] : shown.filter((x) => x.ev.values[fx] === MAYBE_SONG);
+    if (maybe.length) {
+      const sung = lyricsWhereQuiet(maybe, st, lines);
+      for (const x of maybe) {
+        x.ev.values[fx] = "";
+        x.song = sung.has(x);
+      }
+      shown = shown.filter((x) => !maybe.includes(x) || sung.has(x));
+      sungLines = sung.size;
+    }
     if (maxBytes) {
       // Before the songs are weighed against the dub's: a song that goes leaves the dub's own line for it.
       const weight = (ev: { values: string[] }) => Buffer.byteLength(ev.values.join(","), "utf8") + 12;
@@ -515,7 +586,30 @@ export function mergeWithSigns({ dub, ext, signs, own, look, raise, maxBytes }: 
     });
     base.events.push({ kind: "Dialogue", values });
   }
-  return { text: writeScript(base), dropped };
+  return { text: writeScript(base), dropped, ...(sungLines ? { lyrics: sungLines } : {}) };
+}
+
+/**
+ * A full track's signs (signsOnly) and its runs of lines that may be a song's lyrics set like dialogue
+ * (LYRIC_RUN_LINES or more in one style over LYRIC_RUN_MS), those marked MAYBE_SONG for the merge to
+ * decide by the dub. A script with no Effect field has its signs alone.
+ */
+export function signsOfFull(script: Script): Script {
+  const [s, e, st, tx, fx] = ["Start", "End", "Style", "Text", "Effect"].map((f) => at(script.eventFormat, f));
+  const sign = (ev: Script["events"][number]) => SIGN_STYLE.test(ev.values[st] ?? "") || SIGN_TAGS.test(ev.values[tx] ?? "");
+  const maybe = new Set<Script["events"][number]>();
+  if (fx >= 0) {
+    const lines = script.events.filter((ev) => ev.kind === "Dialogue" && !sign(ev) && plainOf(ev.values[tx] ?? ""));
+    for (const run of runsOf(lines.map((ev) => ({ ev, start: stamp(ev.values[s]), end: stamp(ev.values[e]), style: ev.values[st] ?? "" })))) {
+      if (run.length >= LYRIC_RUN_LINES && Math.max(...run.map((r) => r.end)) - run[0].start >= LYRIC_RUN_MS) for (const r of run) maybe.add(r.ev);
+    }
+  }
+  return {
+    ...script,
+    events: script.events
+      .filter((ev) => ev.kind === "Dialogue" && (sign(ev) || maybe.has(ev)))
+      .map((ev) => (maybe.has(ev) ? { kind: ev.kind, values: ev.values.map((v, i) => (i === fx ? MAYBE_SONG : v)) } : ev))
+  };
 }
 
 /**

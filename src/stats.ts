@@ -700,6 +700,11 @@ export function noteError(where: string, error: unknown, what?: string): void {
     count("downloads.notInPack");
     return;
   }
+  // So is a subtitle refused for being too big to be one (a song set frame by frame, a zip bomb).
+  if (error instanceof Error && error.name === "TooBigSubtitle") {
+    count("downloads.tooBig");
+    return;
+  }
   // So is an upload refused for being in another language than it is listed under.
   if (error instanceof Error && error.name === "WrongLanguage") {
     count("downloads.wrongLanguage");
@@ -1000,8 +1005,8 @@ export async function startStats(): Promise<void> {
     today = { ...saved, links: { ...saved.links, ...today.links }, peak: saved.peak ?? {}, keys: { ...(saved.keys ?? {}), ...(today.keys ?? {}) } };
   } catch {}
   try {
-    // Refused packs were once noted as errors; they aren't (see noteError), so old notes go.
-    errors = (JSON.parse(await readFile(path.join(dir(), "errors.json"), "utf8")) as ErrorNote[]).filter((e) => !/is an archive without S\d+E\d+/.test(e.message));
+    // Refused packs and subtitles too big to be one aren't errors (see noteError): a note of one from an older version goes.
+    errors = (JSON.parse(await readFile(path.join(dir(), "errors.json"), "utf8")) as ErrorNote[]).filter((e) => !/is an archive without S\d+E\d+|unpacks to more than a subtitle ever is|too large to be a subtitle/.test(e.message));
   } catch {}
   try {
     const saved = JSON.parse(await readFile(path.join(dir(), "errors-cleared.json"), "utf8")) as { at?: number; base?: ClearBase; undo?: { at: number; base?: ClearBase } };

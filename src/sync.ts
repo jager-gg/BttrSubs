@@ -18,7 +18,7 @@ import path from "node:path";
 import { cacheKey, cachePath } from "./cache.js";
 import { config } from "./config.js";
 import { decodeSubtitle } from "./text.js";
-import { sameLanguage } from "./langcodes.js";
+import { languageCode, sameLanguage } from "./langcodes.js";
 import { count, noteError, scrub } from "./stats.js";
 import { heardSpeech } from "./vad.js";
 import { dialogueLines, isTextCodec, pictureLines, readMkvTiming, readMkvTracks, sharedHead, type MkvTrack } from "./mkv.js";
@@ -30,10 +30,10 @@ import { viewerOf } from "./viewers.js";
 import { otherInstallUrls } from "./installUrls.js";
 import { jellyfinToken, linkedInstallUrls } from "./aiostreamsAccount.js";
 import { jellyfinItemIds, jellyfinVersions } from "./aiostreamsJellyfin.js";
-import { extractEpisodeMarkers, extractSeasonMarkers } from "./matching.js";
 import { kitsuEpisode } from "./ids.js";
 import { FILM_FRAME_MS, keptInOrder, linesOverShift, onFileLines, timingByLines } from "./align.js";
 import { TRACK_CHECK, trackCheckSpots, trackOffVoices, voicesSay, type VoiceSpot } from "./trackcheck.js";
+import { laidOutForPlayers } from "./respace.js";
 import { backgroundReadFits, checkHost, checkReadable, checkReads, fetchFile, noteRead, noteReadOk, noteRefusal, PrivateHost, ReadsPaused, refusalStatus } from "./reads.js";
 
 export interface Cue {
@@ -1669,6 +1669,8 @@ export interface StreamCandidate {
   remembered?: number;
   /** The names of every stream the list holds, as bareName gives them: what a link may be serving in a failed release's place. */
   listed?: ReadonlySet<string>;
+  /** Found in a list asked for by the title's other id (streamCandidates' `alias`), not by the one asked with. */
+  byAlias?: boolean;
 }
 
 /**
@@ -1747,17 +1749,24 @@ export function holdFileLookup(filename: string, until: Promise<unknown>): void 
  * estimated); then the names of other versions of its release (a debrid host can serve the first
  * version of a release AIOStreams lists as its second, or the other way round); then its exact size
  * under any name. Those under another name are taken only at the size their host serves (openPlayable).
+ *
+ * `alias` is the title's other id (an anime episode's Kitsu id beside its IMDb one, or the other way
+ * round). AIOStreams keeps a list for each id it is asked with, and a search by one isn't the search by
+ * the other: a player's server can list an anime's streams by its Kitsu id and send the subtitle request
+ * with the IMDb id. So each place asked for the file by `videoId` is asked by `alias` next when its list
+ * lacks the file, before the next place.
  */
-export async function streamCandidates(aiostreamsUrl: string, videoId: string, type: string, filename: string): Promise<StreamCandidate[]> {
+export async function streamCandidates(aiostreamsUrl: string, videoId: string, type: string, filename: string, alias?: string): Promise<StreamCandidate[]> {
   await heldLookups.get(filename);
   // Asked for the player's address, the lookup gets the list the player chose from (viewers.ts).
   const viewer = viewerOf(aiostreamsUrl, videoId);
-  type Listed = { url?: string; behaviorHints?: { filename?: string; videoSize?: number | string; bingeGroup?: string } };
-  const listOf = async (installUrl: string): Promise<Listed[] | undefined> => {
+  type Listed = { url?: string; behaviorHints?: { filename?: string; videoSize?: number | string; bingeGroup?: string }; streamData?: unknown };
+  const listOf = async (installUrl: string, id = videoId): Promise<Listed[] | undefined> => {
     count("api.aiostreams");
     if (viewer) count("api.aiostreams.forViewer");
-    const response = await fetch(`${installUrl.replace(/\/manifest\.json$/, "")}/stream/${encodeURIComponent(type)}/${encodeURIComponent(videoId)}.json`, {
-      headers: viewer ? { "X-AIOStreams-User-IP": viewer } : undefined,
+    const response = await fetch(`${installUrl.replace(/\/manifest\.json$/, "")}/stream/${encodeURIComponent(type)}/${encodeURIComponent(id)}.json`, {
+      // An AIOStreams client's name: AIOStreams then adds its record of each stream's file (streamData).
+      headers: { "User-Agent": STREAM_DATA_AGENT, ...(viewer ? { "X-AIOStreams-User-IP": viewer } : {}) },
       signal: AbortSignal.timeout(STREAM_LOOKUP_TIMEOUT_MS),
     });
     if (!response.ok) return undefined;
@@ -1777,6 +1786,22 @@ export async function streamCandidates(aiostreamsUrl: string, videoId: string, t
   // own copy of that URL: when this copy's list lacks the file, the configuration's other copies are
   // asked, and the one the player uses answers with the list the player chose from (installUrls.ts).
   const named = () => listed.some((s) => bareName(s.behaviorHints!.filename!) === wanted);
+  // The same install URL asked by the title's other id, when its list by this one lacks the file.
+  const fromAlias = new Set<string>();
+  const byAlias = async (installUrl: string): Promise<boolean> => {
+    if (!alias || named()) return false;
+    const more = await listOf(installUrl, alias).catch(() => undefined);
+    if (!more) return false;
+    const had = listed.length;
+    const added = more.filter((s) => !listed.some((l) => l.url === s.url));
+    for (const s of added) fromAlias.add(s.url!);
+    listed = listed.concat(added);
+    if (!named()) return false;
+    count("sync.aliasList");
+    console.log(`sync: ${filename}: not in the list asked for by ${videoId} (${had} streams); it is in the list asked for by ${alias}`);
+    return true;
+  };
+  await byAlias(aiostreamsUrl);
   // The copies AIOStreams put into the account's linked apps come first (read with the account's
   // password, aiostreamsAccount.ts), then the ones the configuration holds.
   const linked = named() ? [] : await linkedInstallUrls(aiostreamsUrl, STREAM_LOOKUP_TIMEOUT_MS);
@@ -1786,6 +1811,7 @@ export async function streamCandidates(aiostreamsUrl: string, videoId: string, t
     if (!more) continue;
     const had = listed.length;
     listed = listed.concat(more.filter((s) => !listed.some((l) => l.url === s.url)));
+    if (!named() && (await byAlias(other))) break;
     if (!named()) continue;
     const ofLinked = linked.includes(other);
     count(ofLinked ? "sync.linkedInstallUrl" : "sync.otherInstallUrl");
@@ -1794,14 +1820,16 @@ export async function streamCandidates(aiostreamsUrl: string, videoId: string, t
   }
   // A player signed in to AIOStreams' own Jellyfin server has no install URL: the versions that server
   // holds for the title are asked for with a sign-in of the account (aiostreamsJellyfin.ts).
-  const itemIds = named() ? [] : jellyfinItemIds(videoId, type);
+  const itemIds = named() ? [] : [...jellyfinItemIds(videoId, type), ...(alias ? jellyfinItemIds(alias, type) : [])];
   const token = itemIds.length ? await jellyfinToken(aiostreamsUrl, STREAM_LOOKUP_TIMEOUT_MS) : undefined;
   for (const itemId of token ? itemIds : []) {
     count("api.aiostreams.jellyfin");
     const versions = await jellyfinVersions(aiostreamsUrl, token!, itemId, STREAM_LOOKUP_TIMEOUT_MS, viewer).catch(() => undefined);
     if (!versions) continue;
     const had = listed.length;
-    listed = listed.concat(versions.filter((v) => !listed.some((l) => l.url === v.url)).map((v) => ({ url: v.url, behaviorHints: { filename: v.filename, videoSize: v.size } })));
+    const added = versions.filter((v) => !listed.some((l) => l.url === v.url));
+    if (alias && !jellyfinItemIds(videoId, type).includes(itemId)) for (const v of added) fromAlias.add(v.url);
+    listed = listed.concat(added.map((v) => ({ url: v.url, behaviorHints: { filename: v.filename, videoSize: v.size } })));
     if (!named()) continue;
     count("sync.jellyfinVersions");
     console.log(`sync: ${filename}: in no install URL's list (${had} streams); it is among the ${versions.length} versions AIOStreams' Jellyfin server holds for the title`);
@@ -1810,7 +1838,7 @@ export async function streamCandidates(aiostreamsUrl: string, videoId: string, t
   const out: StreamCandidate[] = [];
   const listedNames: ReadonlySet<string> = new Set(listed.map((s) => bareName(s.behaviorHints!.filename!)));
   const add = (streams: typeof listed, how: StreamCandidate["how"]) => {
-    for (const s of streams) if (!out.some((c) => c.url === s.url)) out.push({ url: s.url!, how, listed: listedNames });
+    for (const s of streams) if (!out.some((c) => c.url === s.url)) out.push({ url: s.url!, how, listed: listedNames, ...(fromAlias.has(s.url!) ? { byAlias: true } : {}) });
   };
   add(listed.filter((s) => bareName(s.behaviorHints!.filename!) === wanted).sort(byNearest), "name");
   add(listed.filter((s) => releaseName(s.behaviorHints!.filename!) === loose).sort(byNearest), "loose");
@@ -1837,7 +1865,81 @@ export async function streamCandidates(aiostreamsUrl: string, videoId: string, t
   }
   // Why a file isn't found is otherwise guessed at afterwards: what AIOStreams listed is said here.
   if (out.length === 0) console.log(`sync: ${filename}: AIOStreams lists ${listed.length} streams for ${videoId}, none under this name${size === undefined ? "" : " or at this size"}`);
+  // AIOStreams' record of the playing file, from the one stream that is surely it: its name at the
+  // player's size (or its name alone when the player gave none and one stream has it), else its size alone.
+  const sameName = listed.filter((s) => bareName(s.behaviorHints!.filename!) === wanted && (size === undefined || String(s.behaviorHints!.videoSize ?? "") === size));
+  const sameSize = size === undefined ? [] : listed.filter((s) => String(s.behaviorHints!.videoSize ?? "") === size);
+  const surely = sameName.length === 1 ? sameName[0] : sameName.length === 0 && sameSize.length === 1 ? sameSize[0] : undefined;
+  if (surely) noteListedFacts(filename, surely.streamData);
   return out;
+}
+
+// ---------- what AIOStreams already knows about the playing file ----------
+
+/** The User-Agent of stream lookups: AIOStreams adds its record of each stream's file for a name starting "AIO". */
+const STREAM_DATA_AGENT = "AIOStreams/bttrsubs";
+/** Records measured from the file itself: AIOStreams' own probe, and StremThru's. Others are matched by name. */
+const MEASURED_SOURCES: ReadonlySet<string> = new Set(["local", "stremthru"]);
+/** How long a lookup's record of a file is kept for its play. */
+const LISTED_FACTS_MS = 30 * 60 * 1000;
+
+/** The playing file's tracks as AIOStreams' record gives them: full text subtitle languages, audio languages, length. */
+export interface ListedFacts {
+  textLangs: string[];
+  audioLangs: string[];
+  duration?: number;
+}
+
+/**
+ * What AIOStreams' record of a stream (its `streamData`) says about the file, when the record was
+ * measured from the file (MEASURED_SOURCES); undefined otherwise. Subtitle languages count as
+ * fullTextLanguages counts them: text tracks, not signs, songs or forced ones. Languages come as
+ * names ("English") and are given as codes; a name not known here is left out of the subtitle
+ * languages (so less is skipped) and counts as unknown among the audio ones.
+ */
+export function factsOfListed(streamData: unknown): ListedFacts | undefined {
+  type Track = { lang?: unknown; codec?: unknown; title?: unknown; forced?: unknown };
+  const data = streamData as { duration?: unknown; parsedFile?: { mediaInfoSource?: unknown; subtitleTracks?: unknown; audioTracks?: unknown } } | undefined;
+  const parsed = data?.parsedFile;
+  if (!parsed || typeof parsed.mediaInfoSource !== "string" || !MEASURED_SOURCES.has(parsed.mediaInfoSource)) return undefined;
+  const tracks = (value: unknown): Track[] => (Array.isArray(value) ? value.filter((t): t is Track => typeof t === "object" && t !== null) : []);
+  const code = (lang: unknown) => (typeof lang === "string" ? languageCode(lang) : undefined);
+  const full = (t: Track) => typeof t.codec === "string" && TEXT_CODECS.test(t.codec.toLowerCase()) && t.forced !== true && !/sign|song|forced/i.test(typeof t.title === "string" ? t.title : "");
+  const textLangs = [...new Set(tracks(parsed.subtitleTracks).filter(full).map((t) => code(t.lang)).filter((c): c is string => Boolean(c)))];
+  const audioLangs = tracks(parsed.audioTracks).map((t) => code(t.lang) ?? "und");
+  const duration = typeof data!.duration === "number" && data!.duration > 0 ? data!.duration : undefined;
+  return { textLangs, audioLangs, ...(duration ? { duration } : {}) };
+}
+
+/**
+ * AIOStreams' record of each playing file a lookup found, by file: in memory only, never written to
+ * the cache or the log (a stream's record also holds the release's download details). It answers
+ * only what the file's own header read hasn't in time (embeddedLanguages, hasEnglishVoices,
+ * fileDuration): a first play's list knows the file while its stream is still being opened, and the
+ * header read's answer replaces it once it is in.
+ */
+const listedFacts = new Map<string, ListedFacts & { at: number }>();
+
+function noteListedFacts(filename: string, streamData: unknown): void {
+  const facts = factsOfListed(streamData);
+  const now = Date.now();
+  for (const [key, kept] of listedFacts) if (now - kept.at >= LISTED_FACTS_MS) listedFacts.delete(key);
+  if (!facts) return;
+  listedFacts.set(filename, { ...facts, at: now });
+  count("sync.listedFacts");
+}
+
+/** AIOStreams' record of the playing file, while it is fresh, counted where it answers in the header read's place. */
+function listedFactsOf(filename: string): ListedFacts | undefined {
+  const kept = listedFacts.get(filename);
+  if (!kept || Date.now() - kept.at >= LISTED_FACTS_MS) return undefined;
+  count("sync.listedFactsUsed");
+  return kept;
+}
+
+/** For tests: forget every record of a file AIOStreams gave. */
+export function forgetListedFacts(): void {
+  listedFacts.clear();
 }
 
 /**
@@ -2538,9 +2640,6 @@ export async function lookUpStream(aiostreamsUrl: string, videoId: string, type:
 /** Listed streams tried for the playing file, at most, each with one 1-byte read. */
 const MAX_CANDIDATES = 4;
 
-/** Whether a file's name numbers its episode with no season: "Show 037", not "Show S3 - 02" or "Show.S02E12". */
-const numberedAlone = (name: string) => extractEpisodeMarkers(name).length === 0 && extractSeasonMarkers(name).length === 0;
-
 /** An IMDb episode's id as the anime lists number it ("tt1:2:12" -> "kitsu:1000:37"); undefined for anything else. */
 async function animeEpisodeId(videoId: string): Promise<string | undefined> {
   const own = /^(tt\d+):(\d+):(\d+)$/.exec(videoId);
@@ -2557,15 +2656,21 @@ async function animeEpisodeId(videoId: string): Promise<string | undefined> {
  * AIOStreams' list for one title differs from one request to the next (a slow source misses one
  * answer and is in the next): a film's file wasn't in the list asked for at play and was in one asked
  * for a minute later, and two lists a second apart differed. It is asked again after each of `waits`
- * before the file counts as unlisted. A file failover replaced is in none of them, so that costs only
- * the wait. A series file its name numbers with no season ("Show 037") is asked for once more, when
- * its own list lacks it, as the anime lists number the episode: an IMDb episode's list places such a file
- * by counting the earlier seasons' episodes, which AIOStreams does with an episode 0 a listing carries
- * in one answer and without it in the next, one episode apart; the anime's own number needs no count.
+ * before the file counts as unlisted. A release AIOStreams replaces with another when its link is
+ * opened is still found by its name: its link serves the one that plays (standInFile).
+ * An anime episode asked for by its IMDb id has a second id, the one the anime lists give it
+ * ("kitsu:1000:37"), and AIOStreams keeps a list for each (streamCandidates' `alias`): a player's
+ * server that lists anime by Kitsu ids shows that list, while the subtitle request it sends carries the
+ * IMDb id. And an IMDb episode's list places a file numbered with no season ("Show 037") by counting
+ * the earlier seasons' episodes, which AIOStreams does with an episode 0 a listing carries in one
+ * answer and without it in the next, one episode apart; the anime's own number needs no count. So a
+ * file its own list lacks is asked for by that id too, once, at each place before the next.
  */
 export async function lookUpStreamAgain(aiostreamsUrl: string, videoId: string, type: string, filename: string, waits: number[] = LOOKUP_RETRY_MS): Promise<string | undefined> {
   for (let attempt = 0; ; attempt++) {
-    const candidates = attempt === 0 ? await streamCandidates(aiostreamsUrl, videoId, type, filename) : await streamCandidates(aiostreamsUrl, videoId, type, filename).catch(() => []);
+    // The anime lists' id for the episode, asked for where a list by the episode's own id lacks the file.
+    const alias = attempt === 0 && waits.length > 0 && type === "series" ? await animeEpisodeId(videoId).catch(() => undefined) : undefined;
+    const candidates = attempt === 0 ? await streamCandidates(aiostreamsUrl, videoId, type, filename, alias) : await streamCandidates(aiostreamsUrl, videoId, type, filename).catch(() => []);
     for (const candidate of candidates.slice(0, MAX_CANDIDATES)) {
       const url = await openPlayable(candidate, filename);
       if (!url) continue;
@@ -2578,17 +2683,6 @@ export async function lookUpStreamAgain(aiostreamsUrl: string, videoId: string, 
         console.log(`sync: ${filename}: not in AIOStreams' list at first, found on asking again`);
       }
       return url;
-    }
-    if (attempt === 0 && waits.length > 0 && type === "series" && numberedAlone(fileName(filename))) {
-      const anime = await animeEpisodeId(videoId).catch(() => undefined);
-      const more = anime ? await streamCandidates(aiostreamsUrl, anime, type, filename).catch(() => []) : [];
-      for (const candidate of more.slice(0, MAX_CANDIDATES)) {
-        const url = await openPlayable(candidate, filename);
-        if (!url) continue;
-        count("sync.lookupAnimeEpisode");
-        console.log(`sync: ${filename}: listed under the anime's own episode number (${anime}), not this IMDb episode`);
-        return url;
-      }
     }
     if (attempt >= waits.length) return undefined;
     await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
@@ -2924,8 +3018,9 @@ export async function embeddedLanguages(filename: string, waitMs = 0): Promise<s
   const probed = job ? await Promise.race([job, Promise.resolve(undefined)]) : undefined;
   if (probed) return probed.languages;
   const quick = headerLanguageJobs.get(filename);
-  if (!quick) return undefined;
-  return Promise.race([quick, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), waitMs).unref())]);
+  const read = quick ? await Promise.race([quick, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), waitMs).unref())]) : undefined;
+  // Not read in time: AIOStreams' record of the file, where a lookup found one (listedFacts).
+  return read ?? listedFactsOf(filename)?.textLangs;
 }
 
 const subtitleTrackJobs = new Map<string, Promise<MkvTrack[]>>();
@@ -2982,12 +3077,17 @@ export async function hasEnglishVoices(filename: string, waitMs = 0): Promise<bo
   const probed = job ? await Promise.race([job, Promise.resolve(undefined)]) : undefined;
   if (probed?.audioLang) return englishVoicesIn([probed.audioLang]);
   const quick = headerAudioJobs.get(filename);
-  if (!quick) return undefined;
-  const languages = await Promise.race([quick, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), waitMs).unref())]);
-  return languages ? englishVoicesIn(languages) : undefined;
+  const languages = quick ? await Promise.race([quick, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), waitMs).unref())]) : undefined;
+  if (languages) return englishVoicesIn(languages);
+  // Not read in time: AIOStreams' record of the file, where a lookup found one (listedFacts).
+  const listed = listedFactsOf(filename);
+  return listed ? englishVoicesIn(listed.audioLangs) : undefined;
 }
 
-/** The playing file's length in ms, once read: from earlier reads of it or a header read that has finished. */
+/**
+ * The playing file's length in ms, once known: from earlier reads of it, a header read that has
+ * finished, or else AIOStreams' record of the file (listedFacts).
+ */
 export async function fileDuration(filename: string): Promise<number | undefined> {
   try {
     const found = JSON.parse(await readFile(anchorsFile(filename), "utf8")) as FileAnchors;
@@ -2995,7 +3095,7 @@ export async function fileDuration(filename: string): Promise<number | undefined
   } catch {}
   const job = probeJobs.get(filename);
   const probed = job ? await Promise.race([job, Promise.resolve(undefined)]) : undefined;
-  return probed?.duration || undefined;
+  return probed?.duration || listedFactsOf(filename)?.duration || undefined;
 }
 
 /** Index lines are cut into windows this long, end to end: every window of the file is measured. */
@@ -5123,7 +5223,7 @@ export function syncCaptions(
       // their voices where the English audio has been heard (see refineBySpeech).
       const lines = firstLines;
       const followed = lang && !found.speechOnly ? timingByStarts(anchors, captions, lines, false, found) : undefined;
-      await writeFile(first, retime(text, ext, followed ? followed.shift : byVoices(planShifts(anchors, captions, lines)).shift, factor));
+      await writeFile(first, laidOutForPlayers(retime(text, ext, followed ? followed.shift : byVoices(planShifts(anchors, captions, lines)).shift, factor), ext));
       firstPass.set(key, { file: first, anchors });
     }
     // Gaps or disagreement: read more of the file there, then measure again. Rounds are
@@ -5452,20 +5552,24 @@ export function syncCaptions(
     }
     const out = path.join(cachePath("synced"), `${key}${ext}`);
     // Whole or not at all: a result synced again (voicesPending) replaces one a download may be reading.
-    // Every piece of a cut line takes its first piece's move; the last piece's end ends the line.
+    // Every piece of a cut line takes its first piece's move; the last piece's end ends the line. Its
+    // songs are laid out for players' fonts here (laidOutForPlayers), so no download waits for it.
     await writeWhole(
       out,
-      // No line stays up into the next when it didn't as written (endsApart).
-      retime(
-        text,
-        ext,
-        servedShift,
-        factor,
-        endsApart(
-          parseCues(text, ext).map((c) => ({ start: Math.round(c.start * factor), end: Math.round(c.end * factor) })),
+      laidOutForPlayers(
+        // No line stays up into the next when it didn't as written (endsApart).
+        retime(
+          text,
+          ext,
           servedShift,
-          perLine ? (start, end) => perLine.end(lead(start), end) : undefined
-        )
+          factor,
+          endsApart(
+            parseCues(text, ext).map((c) => ({ start: Math.round(c.start * factor), end: Math.round(c.end * factor) })),
+            servedShift,
+            perLine ? (start, end) => perLine.end(lead(start), end) : undefined
+          )
+        ),
+        ext
       )
     );
     const done = [...(movedLines ? [`${movedLines} lines moved onto their own line`] : []), ...(timed.nudges.size ? [`${timed.nudges.size} lines snapped to the file`] : [])];

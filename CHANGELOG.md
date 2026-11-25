@@ -2,6 +2,18 @@
 
 Each version is a tag (`v1.0.0`) with an image on GitHub's registry (`ghcr.io/jager-gg/bttrsubs:1.0.0`, `:1.0`, `:1` and `:latest`). Versions follow [semantic versioning](https://semver.org): a major version can need a step when upgrading, and its section says which.
 
+## [1.3.0]
+
+New: songs with English Dub from more releases, and karaoke that no longer runs together. Changed: which styling a subtitle gets when more than one applies. Fixed: an English Dub track left empty when its dub captions were another episode's, anime played through a Jellyfin server left unsynced, and files with a very long header. Nothing to do when upgrading: subtitles are timed again the next time they are played.
+
+- **Songs set like dialogue:** a release that writes its opening and ending lyrics in a plain style, not a song style, has them shown with English Dub too, where the dub is quiet over them.
+- **Karaoke that doesn't run together:** a song set syllable by syllable in a font your player doesn't have is laid out again in one it has, so the syllables no longer overlap or drift apart.
+- **One order for styling:** a subtitle's own styling comes first (with Keep the subtitle's own styling), then your file's style, then your style's look, then the plain look. With Keep the subtitle's own styling off, a subtitle's lines take the next one down, where a height-only style left its own styling in place.
+- **Dub captions that don't fit:** where the dub captions found for an episode aren't that episode's, English closed captions from another upload are tried in their place, and listed as English CC when they fit the voices. The track said no subtitle fits the file.
+- **Anime through a Jellyfin server:** a server that lists an anime's streams by its Kitsu id and asks for subtitles by its IMDb id left the playing file unfound, and its subtitles untimed. The file is now looked for by the Kitsu id too, where the list by the IMDb id lacks it.
+- **Files with a very long header** (hundreds of sign styles in their subtitle tracks) are read to where the header ends, where they went unsynced.
+- **Add to AIOStreams** works only from the page that just saved the configuration, not from its install URL alone.
+
 ## [1.2.1]
 
 Fixed: subtitles timed by the audio on a file whose own subtitle track is far off its voices, and Remove sound descriptions in captions that name every speaker. Nothing to do when upgrading: subtitles are timed again the next time they are played.

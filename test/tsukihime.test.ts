@@ -73,6 +73,25 @@ describe("an episode's subtitles from its releases' own tracks", () => {
     expect(byRef.th104.releaseInfo?.[0]).toBe("Show.S02E07.1080p.WEB-DL.DUAL-TEAM");
   });
 
+  it("opens a release whose name gives another season's episode after the others, so it takes no place a release of the episode wants", async () => {
+    placed = { anidbId: 15399, episode: 7, run: false };
+    const asked = service({
+      "/animes/anidb/15399": { id: 6799 },
+      "/animes/6799/episodes/7": {
+        results: [
+          { id: 41, name: "[Group] Show 107 - S04E07 [1080p]", audiolangs: ["ja"], sublangs: ["en"] },
+          { id: 42, name: "[Group] Show - 07 [1080p]", audiolangs: ["ja"], sublangs: ["en"] }
+        ]
+      },
+      "/torrents/42": { files: [{ id: 4, filename: "[Group] Show - 07 [1080p].mkv", attachments: [track(401, "en")] }] },
+      "/torrents/41": { files: [{ id: 5, filename: "[Group] Show 107 - S04E07 [1080p].mkv", attachments: [track(411, "en")] }] }
+    });
+    const rows = await source.tsukihimeSubtitles(request(7), "Show", ["english"]);
+    // The service lists it first; its name gives season 4's 7th where season 2's was asked for, so it is opened last.
+    expect(asked.filter((p) => p.startsWith("/torrents/"))).toEqual(["/torrents/42", "/torrents/41"]);
+    expect(rows.map((r) => r.ref)).toEqual(["th401", "th411"]);
+  });
+
   it("searches by the show's name when the lists don't place the episode, and keeps only that episode's releases", async () => {
     placed = undefined;
     const asked = service({

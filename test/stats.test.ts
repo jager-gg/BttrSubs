@@ -179,6 +179,17 @@ describe("the dashboard page", () => {
   });
 });
 
+describe("a subtitle refused as too big to be one", () => {
+  it("is counted, not noted as an error", async () => {
+    const before = (await stats.statsView("1.3.0")).days[0].total;
+    const tooBig = Object.assign(new Error("subtitle at1 unpacks to more than a subtitle ever is"), { name: "TooBigSubtitle" });
+    stats.noteError("download", tooBig);
+    const after = (await stats.statsView("1.3.0")).days[0].total;
+    expect((after["downloads.tooBig"] ?? 0) - (before["downloads.tooBig"] ?? 0)).toBe(1);
+    expect(after["errors.download"] ?? 0).toBe(before["errors.download"] ?? 0);
+  });
+});
+
 describe("an error noted during a request that still answered", () => {
   it("puts that request under Errors in the activity, says in its detail what failed, and links to it from the error", async () => {
     const link = "fail0001/aa";

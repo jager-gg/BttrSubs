@@ -169,6 +169,23 @@ describe("routes", () => {
   });
 });
 
+describe("adding a saved configuration to its AIOStreams account", () => {
+  it("takes the code its save gave, never the install URL alone", async () => {
+    const { issueAddCode } = await import("../src/app.js");
+    const token = seal(settings);
+    const add = (code?: string) => fetch(`${base}/${token}/configure/add`, { method: "POST", headers: code ? { "X-Add-Code": code } : {} });
+    const bare = await add();
+    expect(bare.status).toBe(403);
+    expect(((await bare.json()) as { error: string }).error).toMatch(/^Save the configuration again/);
+    expect((await add("made-up")).status).toBe(403);
+    // A code given for another configuration doesn't open this one.
+    expect((await add(issueAddCode(seal({ ...settings, languages: ["Arabic"] })))).status).toBe(403);
+    // Its own code gets past: what follows is the add itself (this link keeps no AIOStreams password).
+    const own = await add(issueAddCode(token));
+    expect(own.status).not.toBe(403);
+  });
+});
+
 describe("what other sites may do with this server's answers", () => {
   it("lets any site read the manifest and the lists, and none read a page or draw one in a frame", async () => {
     const manifest = await fetch(`${base}/${seal(settings)}/manifest.json`, { headers: { origin: "https://player.example" } });
@@ -502,7 +519,7 @@ describe("the sources' icons", () => {
     const { readFileSync } = await import("node:fs");
     for (const script of ["setup.js", "dashboard.js"]) {
       const text = readFileSync(new URL(`../assets/ui/${script}`, import.meta.url), "utf8");
-      expect(text).toContain('src="/sources/${id}.png?v=2"');
+      expect(text).toContain('src="/sources/${id}.png?v=3"');
       expect(text).not.toMatch(/<img[^>]+src="https?:/);
     }
   });

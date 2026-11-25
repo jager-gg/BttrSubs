@@ -768,13 +768,16 @@ textarea.field { height: auto; min-height: 92px; padding: 10px 14px; resize: ver
 @media (max-width: 400px) {
   .caption { font-size: 38px; }
 }
+/* Reduce motion: animations end at once, and nothing transitions. A tiny transition duration instead would give
+   every element a transition on every property (transition-property defaults to all), so a size that settles
+   after layout, like a preview line in container units, paints a frame at its first value. */
 @media (prefers-reduced-motion: reduce) {
-  html:not(.moving) *, html:not(.moving) *::before, html:not(.moving) *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  html:not(.moving) *, html:not(.moving) *::before, html:not(.moving) *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
   html:not(.moving) .bubs-blink ellipse { animation: none !important; transform: scaleY(0) !important; }
   html:not(.moving)::view-transition-group(*), html:not(.moving)::view-transition-old(*), html:not(.moving)::view-transition-new(*) { animation: none !important; }
 }
 /* The same when Reduce motion is switched on in the shortcuts dialog. */
-html.calm *, html.calm *::before, html.calm *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+html.calm *, html.calm *::before, html.calm *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 html.calm .bubs-blink ellipse { animation: none !important; transform: scaleY(0) !important; }
 html.calm::view-transition-group(*), html.calm::view-transition-old(*), html.calm::view-transition-new(*) { animation: none !important; }
 

@@ -428,9 +428,10 @@ async function storeSubtitleFile(
 
   // Packs come from other people's uploads: a file inside that unpacks to more than a subtitle ever is
   // (a zip bomb) is refused before and after unpacking, whatever size it declares.
-  if (entry.header.size > MAX_UNPACKED_BYTES) throw new Error(`Subtitle ${id}: the file in the pack is too large to be a subtitle`);
+  const tooBig = () => Object.assign(new Error(`Subtitle ${id}: the file in the pack is too large to be a subtitle`), { name: "TooBigSubtitle" });
+  if (entry.header.size > MAX_UNPACKED_BYTES) throw tooBig();
   const data = entry.getData();
-  if (data.length > MAX_UNPACKED_BYTES) throw new Error(`Subtitle ${id}: the file in the pack is too large to be a subtitle`);
+  if (data.length > MAX_UNPACKED_BYTES) throw tooBig();
   const text = utf16ToUtf8(data);
   await refuseOtherLanguage(text);
   const file = path.join(stored, cacheStem + (path.extname(entry.entryName).toLowerCase() || ".srt"));

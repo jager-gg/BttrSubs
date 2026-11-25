@@ -12,7 +12,8 @@ import path from "node:path";
 import { cacheKey, cachePath, writeFileAtomic } from "./cache.js";
 import { animeToshoSigns, type SignsSource, type Tier } from "./animetosho.js";
 import { getCachedSubtitleFile } from "./downloads.js";
-import { eventCount, ownStyleOf, parseScript, signsOnly, writeScript, type OwnStyle, type Script } from "./signs.js";
+import { eventCount, ownStyleOf, parseScript, signsOfFull, writeScript, type OwnStyle, type Script } from "./signs.js";
+import { laidOutForPlayers } from "./respace.js";
 import { stamp } from "./srt.js";
 import { count, noteError } from "./stats.js";
 import { fileName, fileSubtitleTracks, readingsRef, retime, syncCaptions, syncKey } from "./sync.js";
@@ -46,10 +47,14 @@ interface Kept {
   script?: string;
   /** No better signs are looked for: these are a signs track's, or the look for one is over. */
   settled?: boolean;
+  /** Taken from a full track by this version of what is taken (FULL_KEPT). */
+  version?: number;
 }
 
 /** Signs taken from among a full track's lines: its signs and its dialogue are the same track. */
-const fromFull = (kept: Kept) => kept.found && kept.signs === kept.partner;
+const fromFull = (kept: Kept) => kept.found && Boolean(kept.partner) && kept.signs === kept.partner;
+/** What a full track gives: 2 adds the runs that may be a song's lyrics (signsOfFull). Signs taken by an earlier version are taken again. */
+const FULL_KEPT = 2;
 
 const jobs = new Map<string, Promise<Kept>>();
 // Signs are timed to the file that is read: kept under the release a link serves in a failed one's place.
@@ -59,6 +64,7 @@ const keptFile = (key: string) => path.join(cachePath("signs"), `${key}.json`);
 async function keptFor(key: string): Promise<Kept | undefined> {
   try {
     const kept = JSON.parse(await readFile(keptFile(key), "utf8")) as Kept;
+    if (fromFull(kept) && kept.version !== FULL_KEPT) return undefined;
     if (kept.found || Date.now() - kept.at < NONE_KEPT_MS) return kept;
   } catch {}
   return undefined;
@@ -134,17 +140,19 @@ async function timed(source: SignsSource, { request, aiostreamsUrl, videoId, typ
   if (!move) return "its dialogue's lines don't pair before and after the sync";
   const text = signsFile ? decodeSubtitle(await readFile((await signsFile).file), "english") : original;
   const parsed = parseScript(retime(text, ".ass", move));
-  const script: Script | undefined = parsed && (source.full ? signsOnly(parsed) : parsed);
+  const script: Script | undefined = parsed && (source.full ? signsOfFull(parsed) : parsed);
   if (!script || !eventCount(script)) return "no signs in it";
   return {
     found: true,
     at: Date.now(),
+    ...(source.full ? { version: FULL_KEPT } : {}),
     release: source.release,
     signsName: source.signsName,
     signs: source.signs,
     partner: source.partner,
     events: eventCount(script),
-    script: writeScript(script),
+    // Songs laid out for players' fonts now, so English Dub's download sends the merge as it is.
+    script: laidOutForPlayers(writeScript(script), ".ass"),
     settled: !source.full
   };
 }

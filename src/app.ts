@@ -30,7 +30,8 @@ import { keptSubtitles } from "./kept.js";
 import { theSubtitleDbSubtitles } from "./thesubtitledb.js";
 import { wyzieSubtitles } from "./wyzie.js";
 import { fileOwnStyle, readySigns, signsKept, signsUnderWay, startSigns } from "./signsjob.js";
-import { MAX_MERGED_BYTES, mergeWithSigns } from "./signs.js";
+import { dialogueStyleOf, MAX_MERGED_BYTES, mergeWithSigns } from "./signs.js";
+import { laidOut, respaceSongs } from "./respace.js";
 import { decodeSubtitle } from "./text.js";
 import { languageTitle } from "./langcodes.js";
 import { lookOf, toAss, toSrt, withNotice } from "./srt.js";
@@ -93,10 +94,11 @@ function downloadUrl(
   if (signs) url.searchParams.set("signs", "1");
   if (fileStyle) url.searchParams.set("filestyle", "1");
   // A style's height and look (Settings.styles), in the link: a changed style is a new link to players.
-  // With a look, `own` keeps an upload's own styling (Keep the subtitle's own styling).
+  // `own`: an upload's own styling comes first (Keep the subtitle's own styling), before the file's
+  // style and a look; without it an upload is sent as plain lines.
   if (raise) url.searchParams.set("raise", String(raise));
   if (look) url.searchParams.set("look", look);
-  if (look && own) url.searchParams.set("own", "1");
+  if (own && url.pathname.endsWith(".ass")) url.searchParams.set("own", "1");
   // Sound descriptions taken out (Settings.dropSounds), in the link too: switching it is a new link to players.
   if (profile.dropSounds) url.searchParams.set("sounds", "0");
   // An added addon's subtitle: its own URL, sealed, since it can carry that addon's keys.
@@ -461,6 +463,33 @@ export function describe(filename: string | undefined, fallback: string, season?
 const configureGate = requireRole("addon");
 const statsGate = requireRole("admin");
 
+/**
+ * Codes that let a saved configuration be added to its AIOStreams account, by link: a save's answer
+ * carries one and Add to AIOStreams sends it back. So the person who saved can add it, and someone
+ * who only holds the configuration's install URL can't have its AIOStreams account written to. A
+ * code lasts ADD_CODE_MS and is spent once the add has worked; a failed add can be tried again.
+ */
+const addCodes = new Map<string, { link: string; until: number }>();
+const ADD_CODE_MS = 15 * 60 * 1000;
+
+/** A new code for adding this link to its AIOStreams account (and the expired ones gone). */
+export function issueAddCode(link: string): string {
+  const now = Date.now();
+  for (const [code, held] of addCodes) if (held.until <= now) addCodes.delete(code);
+  const code = randomBytes(18).toString("base64url");
+  addCodes.set(code, { link, until: now + ADD_CODE_MS });
+  return code;
+}
+
+/** Whether a code was issued for this link and hasn't run out. */
+function addCodeFits(link: string, code: string | undefined): boolean {
+  const held = code ? addCodes.get(code) : undefined;
+  return Boolean(held && held.link === link && held.until > Date.now());
+}
+
+/** The link token in an install URL (`…/<token>/manifest.json`). */
+const linkOf = (manifestUrl: string) => new URL(manifestUrl).pathname.split("/").at(-2) ?? "";
+
 /** The addon's routes, the same for the owner (/) and for a personal link (/u/<token>/). */
 function addonRoutes(): express.Router {
   const router = express.Router({ mergeParams: true });
@@ -499,13 +528,13 @@ function addonRoutes(): express.Router {
         storeSettings(token, kept);
         console.log(`configure: link edited in place (${result.settings.languages.length} languages)`);
         // The page can still offer to add it: that also puts an entry made by hand right (its timeout).
-        res.json({ manifestUrl: `${config.publicBaseUrl}/${token}/manifest.json`, inPlace: true, timeoutMs: entryTimeoutMs(), ...(kept.aiostreamsPassword ? { canAdd: true } : {}) });
+        res.json({ manifestUrl: `${config.publicBaseUrl}/${token}/manifest.json`, inPlace: true, timeoutMs: entryTimeoutMs(), ...(kept.aiostreamsPassword ? { canAdd: true, addCode: issueAddCode(token) } : {}) });
         return;
       }
       console.log(`configure: link saved (${(req.body?.languages ?? []).length} languages)`);
       // With the account's password kept, the page can offer to add the URL to AIOStreams itself;
       // for adding it by hand, it names the timeout the entry needs.
-      res.json({ manifestUrl: result.manifestUrl, timeoutMs: entryTimeoutMs(), ...(result.settings.aiostreamsPassword ? { canAdd: true } : {}) });
+      res.json({ manifestUrl: result.manifestUrl, timeoutMs: entryTimeoutMs(), ...(result.settings.aiostreamsPassword ? { canAdd: true, addCode: issueAddCode(linkOf(result.manifestUrl)) } : {}) });
     } catch (error) {
       next(error);
     }
@@ -534,8 +563,9 @@ function addonRoutes(): express.Router {
     }
   });
 
-  // Adds this configuration to its own AIOStreams account, in place of pasting its install URL there.
-  router.post("/configure/add", configureGate, checkLimit, async (_req, res, next) => {
+  // Adds this configuration to its own AIOStreams account, in place of pasting its install URL there:
+  // with the code its save gave (addCodes), never on the install URL alone.
+  router.post("/configure/add", configureGate, checkLimit, async (req, res, next) => {
     try {
       const token = res.locals.token as string | undefined;
       res.set("Cache-Control", "no-store");
@@ -543,7 +573,13 @@ function addonRoutes(): express.Router {
         res.status(400).json({ error: "Save the configuration first" });
         return;
       }
+      const code = req.get("X-Add-Code");
+      if (!addCodeFits(token, code)) {
+        res.status(403).json({ error: "Save the configuration again, then add it to AIOStreams." });
+        return;
+      }
       const result = await addToAiostreams(res.locals.settings as Settings | undefined, `${config.publicBaseUrl}/${token}/manifest.json`);
+      if (!("error" in result)) addCodes.delete(code!);
       if (!("error" in result)) console.log(`configure: link ${result.state === "present" ? "already in" : result.state === "added" ? "added to" : "put right in"} its AIOStreams account`);
       res.status("error" in result ? 400 : 200).json(result);
     } catch (error) {
@@ -1021,6 +1057,17 @@ function addonRoutes(): express.Router {
         }
       }
       const dubListed = ranked.slice(0, closedCaptions ? 1 : perLanguage);
+      // Behind the dub captions stand the other English subtitles that write down what is said, best first:
+      // whether dub captions are listed says nothing of whether they fit the file (a pack's file for an
+      // episode can be another episode's). First the closed captions that aren't tagged as the dub's (on a
+      // file with English voices, what is said is the dub), then the subtitles made for a release named as a
+      // dub, which are tied to that release's cut. Each is timed like any dub captions.
+      const standIns: RankedSubtitle[] = [];
+      if (dubbed) {
+        const captions = await notKnownMissing(await pool("english", { requireDub: false, allowMachine: false, hearingImpaired: "only" }, view));
+        const forDubs = await notKnownMissing(await pool("english", { allowMachine: false, releaseDub: true }, view));
+        for (const sub of [...captions, ...forDubs]) if (![...ranked, ...standIns].some((r) => refOf(r) === refOf(sub))) standIns.push(sub);
+      }
 
       // Other languages: the best subtitle for the episode in each, from any source.
       // Each also keeps its next two candidates: when the best one can't be synced to the file, the
@@ -1045,7 +1092,7 @@ function addonRoutes(): express.Router {
         }
         if (plain[0]) extras.unshift({ subtitle: plain[0], lang: "English", alts: [...plain.slice(1).filter((s) => !s.sealedUrl).slice(0, ALTERNATES), ...packNeighbours(plain[0])] });
       }
-      return { ranked, closedCaptions, dubListed, extras, dubbed };
+      return { ranked, closedCaptions, dubListed, extras, dubbed, standIns };
     };
     const playing: PlayingFile | undefined =
       profile.aiostreamsUrl && stremioRequest.filename && stremioRequest.imdbId
@@ -1131,7 +1178,7 @@ function addonRoutes(): express.Router {
     const opensubs = withHashMatches(opensubsListed, await byHashJob);
     const others = (language: string) => [...subdl, ...fromWyzie, ...opensubs, ...fromCat, ...fromAddons.flat()].filter((sub) => filedUnder(sub, language));
     const final: PickView = { others, wait: inTime, map: seasons };
-    const { ranked, closedCaptions, dubListed, extras, dubbed } = await pick(final, async () => {
+    const { ranked, closedCaptions, dubListed, extras, dubbed, standIns } = await pick(final, async () => {
       const englishOriginal = (await englishJob) === true;
       // The playing file's voices are known from its header within the time the list keeps for it.
       const englishVoices = headerFile ? await hasEnglishVoices(headerFile, Math.max(0, deadline + HEADER_GRACE_MS - Date.now())) : undefined;
@@ -1164,12 +1211,13 @@ function addonRoutes(): express.Router {
     if (playing && profile.ownStyle && profile.aiostreamsUrl) void fileOwnStyle(profile.aiostreamsUrl, playing.videoId, playing.type, playing.filename, 0);
     const placed = [
       // Each dub track falls back on the ones after it, listed or not: two uploads often carry the same
-      // dub captions, one of them off by a second or so and harder to fit.
+      // dub captions, one of them off by a second or so and harder to fit. After those, the closed
+      // captions from other uploads (standIns), and last its own pack's neighbouring files.
       ...dubListed.map((subtitle, index) => ({
         subtitle,
         code: undefined as string | undefined,
         cc: closedCaptions,
-        alts: [...ranked.slice(index + 1).filter((s) => !s.sealedUrl).slice(0, ALTERNATES), ...packNeighbours(subtitle)]
+        alts: [...[...ranked.slice(index + 1), ...standIns].filter((s) => !s.sealedUrl).slice(0, ALTERNATES), ...packNeighbours(subtitle)]
       })),
       ...extras.map(({ subtitle, lang, alts }) => ({
         subtitle,
@@ -1205,6 +1253,9 @@ function addonRoutes(): express.Router {
     }
     // A pack found not to hold this episode (its only file is another one) gives its place to the
     // next subtitle in line that isn't known to lack it, and the track is left out when there is none.
+    // A closed-captions stand-in that took a dub track's place is named as closed captions, as one listed outright is.
+    const standInRefs: ReadonlySet<string> = new Set(standIns.map((sub) => refOf(sub)));
+    const isCc = (track: { cc: boolean; subtitle: RankedSubtitle }) => track.cc || standInRefs.has(refOf(track.subtitle));
     const tracks: typeof placed = [];
     for (const track of placed) {
       let current: (typeof placed)[number] | undefined = track;
@@ -1315,7 +1366,7 @@ function addonRoutes(): express.Router {
       // track it came from: list it once.
       const seen = new Set<string>();
       for (let i = 0; i < tracks.length; ) {
-        const id = `${tracks[i].code ?? (tracks[i].cc ? "cc" : "dub")}|${refOf(tracks[i].subtitle)}|${tracks[i].season}|${tracks[i].episode}`;
+        const id = `${tracks[i].code ?? (isCc(tracks[i]) ? "cc" : "dub")}|${refOf(tracks[i].subtitle)}|${tracks[i].season}|${tracks[i].episode}`;
         if (seen.has(id)) tracks.splice(i, 1);
         else (seen.add(id), i++);
       }
@@ -1371,7 +1422,7 @@ function addonRoutes(): express.Router {
     {
       const seen = new Set<string>();
       for (let i = 0; i < tracks.length; ) {
-        const id = `${tracks[i].code ?? (tracks[i].cc ? "cc" : "dub")}|${refOf(tracks[i].subtitle)}|${tracks[i].season}|${tracks[i].episode}`;
+        const id = `${tracks[i].code ?? (isCc(tracks[i]) ? "cc" : "dub")}|${refOf(tracks[i].subtitle)}|${tracks[i].season}|${tracks[i].episode}`;
         if (seen.has(id)) tracks.splice(i, 1);
         else (seen.add(id), i++);
       }
@@ -1450,7 +1501,7 @@ function addonRoutes(): express.Router {
     const syncedCount = tracks.filter(confirmed).length;
     const pendingCount = tracks.filter((t) => synced(t) && !confirmed(t)).length;
     const trackDetail = tracks.map((t) => ({
-      lang: t.code ? languageTitle(t.code) : t.cc ? "English CC" : "English Dub",
+      lang: t.code ? languageTitle(t.code) : isCc(t) ? "English CC" : "English Dub",
       source: sourceOfRef(refOf(t.subtitle)),
       ref: refOf(t.subtitle),
       release: (t.subtitle.releaseInfo ?? []).find(Boolean) ?? undefined,
@@ -1494,7 +1545,7 @@ function addonRoutes(): express.Router {
         id: `bttrsub-${refOf(track.subtitle)}`,
         lang: sentLanguage(track),
         // Players and AIOStreams' and AIOMetadata's Jellyfin servers show label as the track's description.
-        label: trackLabel(track.code, confirmed(track) || audioOf.has(track.subtitle) ? true : synced(track) ? "pending" : false, audioOf.get(track.subtitle), track.cc, signsFound && !track.code && (synced(track) || track.alts.length > 0)),
+        label: trackLabel(track.code, confirmed(track) || audioOf.has(track.subtitle) ? true : synced(track) ? "pending" : false, audioOf.get(track.subtitle), isCc(track), signsFound && !track.code && (synced(track) || track.alts.length > 0)),
         url: downloadUrl(baseUrl, profile, track.subtitle, track.season, track.episode, synced(track) || track.alts.length ? playing : undefined, track.code, track.alts.map((alt) => ({ ref: refOf(alt), at: place(alt), pick: alt.pick })), asAss.has(track.subtitle), styleOf(track.code).up, styleOf(track.code).look, profile.keepAss)
       })),
       cacheMaxAge: keepFor,
@@ -1824,15 +1875,21 @@ function addonRoutes(): express.Router {
       // Sound descriptions come out of the text sent, after the timing: the sync never sees the difference.
       const decoded = notThisFile ? NOT_THIS_FILE : decodeSubtitle(await readFile(served), lang);
       const text = req.query.sounds === "0" && !notThisFile ? withoutSounds(decoded, ext) : decoded;
-      // Signs & songs with English Dub (signs=1) and English in the file's own style (filestyle=1): one
-      // script of the signs and the dub's lines, each waited on for at most STYLE_WAIT_MS. Signs still
-      // being found or timed by then: sent without, and not kept, so the next request has them; signs
-      // that a signs track may still replace: sent, and not kept either.
+      // A look's order: the downloaded subtitle's own styling (Keep the subtitle's own styling: `own=1`, or
+      // an ASS link with no other reason to be one, which a list made by an older version still holds), then
+      // the playing file's own subtitle style (filestyle=1), then the style's look, then the plain look.
+      const keepsOwn = req.query.own === "1" || (req.query.raise === undefined && req.query.look === undefined && req.query.signs !== "1" && req.query.filestyle !== "1");
+      const uploadStyle = keepsOwn && !notThisFile && (req.query.signs === "1" || req.query.filestyle === "1") && /^\.(ass|ssa)$/.test(ext) ? dialogueStyleOf(text) : undefined;
+      // Signs & songs with English Dub (signs=1) and the file's own style (filestyle=1): one script of the
+      // signs and the dub's lines, each waited on for at most STYLE_WAIT_MS. Signs still being found or
+      // timed by then: sent without, and not kept, so the next request has them; signs that a signs track
+      // may still replace: sent, and not kept either. A subtitle with styling of its own that it keeps
+      // goes as it is, or, merged with signs, has its lines in its own dialogue style.
       let merged: ReturnType<typeof mergeWithSigns> | undefined;
       let signsFrom: string | undefined;
-      let styledBy: "file" | undefined;
+      let styledBy: "file" | "subtitle" | undefined;
       const wantsSigns = !notThisFile && asAss && req.query.signs === "1" && !lang && Boolean(vid && file);
-      const wantsOwn = !notThisFile && asAss && req.query.filestyle === "1" && Boolean(profile.aiostreamsUrl && vid && type && file);
+      const wantsOwn = !notThisFile && asAss && req.query.filestyle === "1" && !uploadStyle && Boolean(profile.aiostreamsUrl && vid && type && file);
       if (wantsSigns || wantsOwn) {
         // The dub's own lines go first: they wait at most STYLE_WAIT_MS for signs or a style still on their way.
         const left = Math.min(STYLE_WAIT_MS, Math.max(0, deadline - Date.now()));
@@ -1843,13 +1900,13 @@ function addonRoutes(): express.Router {
         if (signs === "pending" || (signs && !signs.settled)) final = false;
         const found = signs && signs !== "pending" ? signs : undefined;
         if (found || own) {
-          merged = mergeWithSigns({ dub: text, ext, signs: found?.script, own, look: look ? lookOf(look) : undefined, raise: raised, maxBytes: MAX_MERGED_BYTES });
+          merged = mergeWithSigns({ dub: text, ext, signs: found?.script, own: (found && uploadStyle) || own, look: look ? lookOf(look) : undefined, raise: raised, maxBytes: MAX_MERGED_BYTES });
           if (merged.dropped.heavy || merged.dropped.plained) {
             count("downloads.signsTooHeavy");
             console.log(`download ${ref}: the signs are too heavy to send whole: ${merged.dropped.plained ?? 0} of the songs' events made plain lyric lines, ${merged.dropped.heavy ?? 0} events left out, by style, the songs first`);
           }
           if (found) signsFrom = `${found.signsName}, ${found.release}`;
-          if (own) styledBy = "file";
+          styledBy = found && uploadStyle ? "subtitle" : own ? "file" : undefined;
         }
       }
       // The playing file isn't in AIOStreams' list (a release its host no longer has, replaced by
@@ -1861,7 +1918,11 @@ function addonRoutes(): express.Router {
         outcome = `${outcome}: the playing file isn't in AIOStreams' list`;
         count("downloads.fileNotFound");
       }
-      const sentText = merged ? merged.text : asAss ? toAss(text, ext, raised, look, !look || req.query.own === "1") : toSrt(text, ext);
+      const made = merged ? merged.text : asAss ? toAss(text, ext, raised, look, keepsOwn) : toSrt(text, ext);
+      // Songs set piece by piece in a font players lack, laid out again in one they have (respace.ts).
+      // Done when the subtitle was synced or its signs kept (laidOutForPlayers); here only for one saved before that.
+      const respaced = (merged || asAss) && !laidOut(made) ? respaceSongs(made) : undefined;
+      const sentText = respaced?.text ?? made;
       const body = Buffer.from(unfound ? withNotice(sentText, Boolean(merged) || asAss, FILE_NOT_FOUND) : sentText, "utf8");
 
       const release = listedRelease(fallback ?? ref);
@@ -1879,7 +1940,8 @@ function addonRoutes(): express.Router {
           ...(lang ? { lang } : {}),
           ...(release ? { release } : {}),
           ...(signsFrom && merged ? { signs: signsFrom, signsDropped: merged.dropped } : {}),
-          ...(styledBy ? { styled: styledBy } : {})
+          ...(styledBy ? { styled: styledBy } : {}),
+          ...(respaced ? { respaced: respaced.lines } : {})
         }
       };
       // One line per download: which subtitle went to which file, and how it was timed.

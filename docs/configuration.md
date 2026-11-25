@@ -61,7 +61,11 @@ Log files are kept in the cache volume's `logs` folder, one per UTC day, so the 
 
 A subtitle uploaded as ASS is sent as ASS, with its styles and positions: lines raised over burned-in text, signs placed where they belong. This is for players that draw ASS. Jellyfin through AIOMetadata passes ASS on to an app that takes it and converts it for one that doesn't.
 
-Off, a subtitle is sent as SRT, which every player shows, unless a style, Signs & songs or the file's own style applies to it: those send ASS either way.
+Off, a subtitle is sent as SRT, which every player shows, unless a style, Signs & songs or the file's own style applies to it: those send ASS either way, with the upload's lines as plain text in that style.
+
+Which look a subtitle gets, first to last: its own styling (with this on, when it has some), then the file's style (**Use your file's subtitle style**), then a style's look, then the plain look. A style's height moves any of them up.
+
+A song set syllable by syllable in a font most players don't have is laid out again in one they have (Arial, Trebuchet MS or Georgia, by the font's kind), so its syllables don't run into each other when the player draws its own font.
 
 ### Remove sound descriptions
 
@@ -85,7 +89,9 @@ It needs a player that shows ASS. The signs' fonts aren't in the file, so a play
 
 ### Use your file's subtitle style
 
-Every subtitle takes the font, size, colours and margins of the subtitles inside the playing file. Where that font lacks the letters of a language, the player uses its own. The style is read from the file's English dialogue track and sized to the script it is in, so the subtitles look like the release's own. The file's attached fonts are there for players that load them.
+Subtitles take the font, size, colours and margins of the subtitles inside the playing file, in place of a style's look. Where that font lacks the letters of a language, the player uses its own. The style is read from the file's English dialogue track and sized to the script it is in, so the subtitles look like the release's own. The file's attached fonts are there for players that load them.
+
+A subtitle that keeps its own styling (**Keep the subtitle's own styling**) keeps it. With English Dub and Signs & songs, the dub's lines then take the dub captions' own dialogue style.
 
 A file with no styled subtitles keeps the plain look, or your style.
 
@@ -96,4 +102,4 @@ A style is a look, a height on screen, or both. It applies to all subtitles, ani
 - **Look:** Anime streaming, White outline, Bold outline, Yellow, Dark box or Large. Its text and outline colours, font (one of six, or any font named by hand that your player has), size, letter spacing, outline, shadow, bold, italic, box and how solid the box is can be changed, and its lines put at the top or the bottom of the picture. A look applies to subtitles with no styling of their own.
 - **Height:** how far up the lines sit, from 1 to 80% of the picture. 15% clears most text burned in at the bottom.
 
-Every subtitle of a title with a style is sent as ASS. With **Keep the subtitle's own styling** on, an upload that has its own styling keeps it and only moves up. Players that draw ASS show the style; others show the words as they are.
+Every subtitle of a title with a style is sent as ASS. With **Keep the subtitle's own styling** on, an upload that has its own styling keeps it and only moves up; off, its lines take the style. Players that draw ASS show the style; others show the words as they are.

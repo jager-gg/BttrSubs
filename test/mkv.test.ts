@@ -137,6 +137,20 @@ describe("a file's header, read once", () => {
     expect(starts).toHaveLength(3);
   });
 
+  it("reads on past 512 KB to where the header's tracks end, when they declare more", async () => {
+    const file = mkv([{ track: 3, start: 1000, duration: 2000 }], true, 600_000);
+    files.set("/longer.mkv", file);
+    const url = `${base}/longer.mkv`;
+    asked.length = 0;
+    const tracks = await readMkvTracks(url);
+    expect(tracks?.tracks.map((t) => t.name)).toEqual(["video", "audio", "Full Subtitles", "Signs and Songs"]);
+    const second = asked.filter((a) => a.startsWith("/longer.mkv ")).map((a) => a.split(" ")[1])[1];
+    const [, from, to] = /bytes=(\d+)-(\d+)/.exec(second)!.map(Number);
+    expect(from).toBe(65536);
+    expect(to + 1).toBeGreaterThan(600_000);
+    expect(to + 1).toBeLessThan(700_000);
+  });
+
   it("reads the rest of an index that runs past where the header said the next thing starts", async () => {
     const file = mkv([{ track: 3, start: 1000, duration: 2000 }, { track: 3, start: 5000, duration: 1500 }]);
     files.set("/short-bound.mkv", file);

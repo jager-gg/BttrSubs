@@ -23,7 +23,7 @@ BttrSubs is a self-hosted subtitle addon for [AIOStreams](https://github.com/Vir
 ## Features
 
 - **Synced to your file.** BttrSubs reads the timing of the subtitles inside the file you're playing and moves each downloaded subtitle to match. A file with no subtitles is timed by the speech in its audio.
-- **English Dub captions.** Subtitles written from the English dub, so the words match the voices. When none exist, official English closed captions are used.
+- **English Dub captions.** Subtitles written from the English dub, so the words match the voices. When none exist, official English closed captions are used, and when the ones found don't fit your file, closed captions from another upload take their place.
 - **Regular English.** A separate choice, for watching in the original language.
 - **Other languages.** The best subtitle for each language you pick. Official translations rank first, and machine translations are left out unless you allow them.
 - **Many sources.** SubSource, SubDL, Wyzie Subs, OpenSubtitles, TheSubtitleDB, Gestdown, Anime Tosho, TsukiHime, aninzb and Subtitle Cat, plus up to 3 other Stremio subtitle addons. Results from all of them are ranked together.
@@ -97,7 +97,7 @@ BttrSubs signs in when you leave a field, never while you type. It then shows wh
 | Stremio, or apps that use Stremio addons | A linked account. In AIOStreams: **Save & Install → Linked accounts → Link an account → Stremio**, then **Push** |
 | Jellyfin apps connected to AIOMetadata | The URL from AIOMetadata: **Jellyfin → Make titles play → Stream addon for everyone** |
 
-The password is stored encrypted inside your BttrSubs install URL and sent only to your AIOStreams. Nothing in AIOStreams is changed unless you press **Add to AIOStreams** on the last step.
+The password is stored encrypted inside your BttrSubs install URL and sent only to your AIOStreams. Nothing in AIOStreams is changed unless you press **Add to AIOStreams** on the last step, and only the page that just saved the configuration can do that: someone who only has your install URL can't.
 
 If you run your own AIOStreams, set **Pipeline cache TTL** to `60` in its admin settings. Why each of these is needed is explained in [docs/aiostreams.md](docs/aiostreams.md).
 
@@ -127,10 +127,10 @@ You also choose whether hearing-impaired subtitles are included, left out or the
 
 | Switch | Starts | When it's on |
 |---|---|---|
-| Keep the subtitle's own styling | On | A subtitle uploaded as ASS keeps its fonts, colours and positions. Off sends subtitles as plain SRT, unless a style, Signs & songs or the file's own style applies |
+| Keep the subtitle's own styling | On | A subtitle uploaded as ASS keeps its fonts, colours and positions, before the file's style or a style. Off sends it as plain text, in the file's style or a style when one applies |
 | Remove sound descriptions | Off | [door creaks], (laughs), sung ♪ lines and speaker names like JOHN: are taken out, and Mary: too in captions that name every speaker. The timing stays the same |
 | Signs & songs with English Dub | Off | Anime only. The on-screen text and song lines a fan release typesets are shown with English Dub, timed to your file. Needs a player that shows ASS |
-| Use your file's subtitle style | Off | Every subtitle takes the font, size and colours of the subtitles inside your file |
+| Use your file's subtitle style | Off | Subtitles take the font, size and colours of the subtitles inside your file, in place of a style's look. One that keeps its own styling keeps it |
 
 Below the switches you can add **styles**: a look, a height on screen, or both, for all subtitles, anime, series, films or one show.
 

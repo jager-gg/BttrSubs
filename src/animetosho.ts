@@ -973,7 +973,10 @@ export async function downloadAnimeTosho(ref: string): Promise<Buffer> {
     size += value.length;
     if (size > MAX_TRACK_BYTES) {
       await reader.cancel().catch(() => undefined);
-      throw new Error(`subtitle ${ref} unpacks to more than a subtitle ever is`);
+      // Refused, not a fault: a track this big is a song set frame by frame (see stats noteError).
+      const tooBig = new Error(`subtitle ${ref} unpacks to more than a subtitle ever is`);
+      tooBig.name = "TooBigSubtitle";
+      throw tooBig;
     }
     parts.push(value);
   }

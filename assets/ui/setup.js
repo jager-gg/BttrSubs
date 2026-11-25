@@ -12,6 +12,12 @@
   "use strict";
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  // Focus put back after a step is drawn again, for a keyboard. A dropdown focused from code opens on iOS
+  // (its picker comes back right after a choice), so after a touch a dropdown isn't refocused.
+  let touch = false;
+  addEventListener("pointerdown", (e) => { touch = e.pointerType === "touch"; }, true);
+  addEventListener("keydown", () => { touch = false; }, true);
+  const refocus = (el) => { if (el && !(touch && el.tagName === "SELECT")) el.focus(); };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   // The Reduce motion switch (html.calm or html.moving) wins over the device's setting.
   const reduce = document.documentElement.classList.contains("calm") || (!document.documentElement.classList.contains("moving") && matchMedia("(prefers-reduced-motion: reduce)").matches);
@@ -73,10 +79,10 @@
     ["skipEmbedded", "Skip languages the file already has", "On: a language the video already has full subtitles in is left out. English Dub always stays, except on a title made in English: there it is regular English, left out like any other when the video has English."],
     ["allowMachine", "Machine and AI translations", "On: they can be picked too. Off leaves them out completely."],
     ["hideUnsynced", "Only subtitles that sync", "On: a subtitle that can't be synced to your file is left out, instead of listed as not synced. When the file itself can't be read, nothing is listed."],
-    ["keepAss", "Keep the subtitle's own styling", "Some subtitles carry their own fonts, colours and positions. On: they keep them, once the subtitle has been fetched. Off: they are sent as plain text, unless a style below, Signs & songs or your file's style applies."],
+    ["keepAss", "Keep the subtitle's own styling", "Some subtitles carry their own fonts, colours and positions. On: they keep them, once the subtitle has been fetched, before your file's style or a style below. Off: they are sent as plain text, in your file's style or a style below when one applies."],
     ["dropSounds", "Remove sound descriptions", "On: [door creaks], (laughs), sung ♪ lines and speaker names like JOHN: are taken out of the text, and Mary: too in captions that name every speaker. The timing stays the same."],
     ["signs", "Signs & songs with English Dub", "Anime only, and only with English Dub picked. On: the on-screen text and song lines a fan release typesets are shown with English Dub, timed to your file. They come from Anime Tosho, also when that source is off. Your player needs to show ASS subtitles."],
-    ["ownStyle", "Use your file's subtitle style", "On: every subtitle takes the font, size and colours of the subtitles inside your file, when it has styled ones, in place of your style's look below and of the upload's own styling. A font without the letters of a language falls back to your player's own. Off: the plain look, or your style below."]
+    ["ownStyle", "Use your file's subtitle style", "On: subtitles take the font, size and colours of the subtitles inside your file, when it has styled ones, in place of your style's look below. A subtitle that keeps its own styling (above) keeps it. A font without the letters of a language falls back to your player's own. Off: your style below, or the plain look."]
   ];
   const STYLE = new Set(["keepAss", "dropSounds", "signs", "ownStyle"]);
   const HI = { include: "Hearing-impaired included", exclude: "No hearing-impaired", only: "Hearing-impaired only" };
@@ -108,8 +114,9 @@
     preview: { scene: "dark", text: "" },
     name: C?.label ?? "",
     url: "", inPlace: false, sent: "",
-    // Whether the saved configuration can be added to AIOStreams from here, and how that went ("" until tried).
-    canAdd: false, added: "", timeoutMs: 0,
+    // Whether the saved configuration can be added to AIOStreams from here, and how that went ("" until tried);
+    // the code its save gave for that, sent back with the add.
+    canAdd: false, added: "", timeoutMs: 0, addCode: "",
     // The AIOStreams account the server last accepted (accountMark); "" stands for the saved one.
     checkedAio: S.saved.aio ? "" : null,
     // The Sync step's last test: what it was asked for (testMark) and what it found (configure.ts, AccountTest).
@@ -342,7 +349,7 @@
   const site = (address) => `<a class="out-link" href="https://${address}" target="_blank" rel="noopener">${address}${icon("ext")}<span class="sr-only"> (opens in a new tab)</span></a>`;
   // A logo drawn with no ground of its own sits on black, as its app shows it.
   const ON_BLACK = new Set(["stremio", "aiometadata"]);
-  const srcImg = (id) => (`<img class="src-ic${ON_BLACK.has(id) ? " on-black" : ""}" src="/sources/${id}.png?v=2" alt="" width="24" height="24">`);
+  const srcImg = (id) => (`<img class="src-ic${ON_BLACK.has(id) ? " on-black" : ""}" src="/sources/${id}.png?v=3" alt="" width="24" height="24">`);
   const sw = (name, title, help, on, extra = "", lead = "") =>
     `<div class="set cfg-switch"><div class="set-label">${lead}<label class="lbl" for="c-${name}">${title}</label><p>${help}</p>${extra}</div><div class="set-control"><input class="switch" type="checkbox" id="c-${name}" data-flag="${name}"${on ? " checked" : ""} role="switch"></div></div>`;
   // `marks` sit beside the label, outside the <label>, so a button among them is a control of its own.
@@ -683,7 +690,7 @@
       else { f.removeAttribute("aria-invalid"); f.setAttribute("aria-describedby", `h-${k}`); }
     });
     const firstKey = Object.keys(err)[0];
-    if (firstKey && focus) ($(`#c-${firstKey}`, main) ?? $(`#e-${firstKey}`, main))?.focus();
+    if (firstKey && focus) refocus($(`#c-${firstKey}`, main) ?? $(`#e-${firstKey}`, main));
   }
   // The server's messages start with what they're about ("SubDL API key: …"): each goes under its field, on its step.
   const FIELD_OF = [["SubSource", "subsource", "sources"], ["SubDL", "subdl", "sources"], ["Wyzie", "wyzie", "sources"], ["Other addons", "addons", "sources"], ["Sources", "sources", "sources"], ["Another install URL", "aioAlso", "sync"], ["AIOStreams UUID", "aioId", "sync"], ["AIOStreams password", "aioPw", "sync"], ["AIOStreams", "aioAddress", "sync"], ["Languages", "langs", "languages"], ["Configuration name", "name", "finish"], ["Styles", "styles", "style"], ["Move subtitles up", "styles", "style"]];
@@ -763,6 +770,7 @@
     st.url = answer.manifestUrl;
     st.inPlace = Boolean(answer.inPlace);
     st.canAdd = Boolean(answer.canAdd);
+    st.addCode = typeof answer.addCode === "string" ? answer.addCode : "";
     st.timeoutMs = Number(answer.timeoutMs) || 0;
     st.added = "";
     st.reached = STEPS.length;
@@ -828,13 +836,13 @@
     $("#c-style-where", b)?.addEventListener("change", (e) => {
       st.addStyle.scope = e.target.value;
       go("style", { instant: true, keepScroll: true });
-      $(st.addStyle.scope === "show" ? "#c-style-show" : "#c-style-where", main)?.focus();
+      refocus($(st.addStyle.scope === "show" ? "#c-style-show" : "#c-style-where", main));
     });
     $("#c-style-show", b)?.addEventListener("input", (e) => { st.addStyle.id = e.target.value; });
     $("#c-style-lang", b)?.addEventListener("change", (e) => {
       st.addStyle.lang = e.target.value;
       go("style", { instant: true, keepScroll: true });
-      $("#c-style-lang", main)?.focus();
+      refocus($("#c-style-lang", main));
     });
     // The preview draws what was last touched: the style being added, or a style's row.
     // A number in a stepper's own range, as its field holds it.
@@ -1014,7 +1022,7 @@
       else st.styles.push(rule);
       st.addStyle = { scope: a.scope, id: "", lang: "", look: "", up: String(S.limits.usualUp), changes: {} };
       go("style", { instant: true, keepScroll: true });
-      $("#c-style-where", main)?.focus();
+      refocus($("#c-style-where", main));
     });
     $$("[data-style-look]", b).forEach((x) => x.addEventListener("change", () => {
       const r = st.styles[Number(x.dataset.styleLook)];
@@ -1038,7 +1046,7 @@
     $$("[data-style-remove]", b).forEach((x) => x.addEventListener("click", () => {
       st.styles.splice(Number(x.dataset.styleRemove), 1);
       go("style", { instant: true, keepScroll: true });
-      $("#c-style-where", main)?.focus();
+      refocus($("#c-style-where", main));
     }));
     $$("[data-goto]", b).forEach((x) => x.addEventListener("click", () => go(x.dataset.goto)));
     $("[data-back]", b)?.addEventListener("click", () => { const i = STEPS.findIndex(([s]) => s === st.step); go(i > 0 ? STEPS[i - 1][0] : "intro"); });
@@ -1063,8 +1071,8 @@
       let answer = {};
       let failed = "";
       try {
-        // The saved configuration's own address: the server reads the account from it, so nothing is sent.
-        const response = await fetch(new URL(st.url).pathname.replace(/\/manifest\.json$/, "/configure/add"), { method: "POST", headers: { Accept: "application/json" } });
+        // The saved configuration's own address: the server reads the account from it. Only the save's code is sent.
+        const response = await fetch(new URL(st.url).pathname.replace(/\/manifest\.json$/, "/configure/add"), { method: "POST", headers: { Accept: "application/json", "X-Add-Code": st.addCode } });
         answer = await response.json().catch(() => ({}));
         if (response.status === 401) failed = "Signed out. Reload the page to sign in again.";
         else if (response.status === 429) failed = "Too many tries just now. Wait a minute and try again.";

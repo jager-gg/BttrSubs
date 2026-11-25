@@ -699,6 +699,23 @@ describe("dub caption and CC tracks", () => {
     expect(refOfTrack(answer.subtitles[0])).toBe("ss9211");
     expect(altsOf(answer.subtitles[0])).toEqual(["ss9212"]);
   });
+
+  it("puts the closed captions that aren't tagged as the dub's behind the dub captions, then subtitles made for a dubbed release, four in all", async () => {
+    // Dub captions being listed says nothing of whether they fit the file: the closed captions get their turn after them.
+    const tagged = [9221, 9222].map((id) => sub(id, `Show S01E05 English Dub ${id}`, { downloads: 9300 - id }));
+    const captions = [sub(9223, "Show S01E05 Netflix", { hearingImpaired: true, commentary: "Netflix" }), sub(9224, "Show - S01E05 (005).English[CC]", { hearingImpaired: true })];
+    const regular = sub(9225, "Show S01E05 WEB-TEAM");
+    const forDubbed = [sub(9226, "show.s01e05.dubbed.hdtv.x264-team"), sub(9227, "show.s01e05.dubbed.720p.hdtv.x264-team")];
+    sites((url) => subsource(url, { english: [...tagged, ...captions, regular, ...forDubbed] }, {}, 109) ?? cinemeta(url));
+    await fileWithoutTrack("Show.S01E05.Both.mkv");
+    const answer = await list({ subsource: "sk_cc_behind_key_008", aiostreams: AIO, languages: ["English"], allowMachine: false, hearingImpaired: "include" }, "tt0000709:1:5", playing("Show.S01E05.Both.mkv"));
+    expect(answer.subtitles).toHaveLength(1);
+    expect(answer.subtitles[0].label).toMatch(/^Dub · /);
+    expect(refOfTrack(answer.subtitles[0])).toBe("ss9221");
+    // The other dub captions first, then the closed captions, the official ones before the rest, then one made for a
+    // release named as a dub: four in all, as for any track, and never the regular subtitle.
+    expect(altsOf(answer.subtitles[0])).toEqual(["ss9222", "ss9223", "ss9224", "ss9226"]);
+  });
 });
 
 describe("a subtitle whose lines run far past the file's end", () => {
@@ -1075,6 +1092,16 @@ describe("signs & songs and the file's own style", () => {
     expect([byRef.ss9851.searchParams.get("signs"), byRef.ss9851.searchParams.get("filestyle")]).toEqual(["1", "1"]);
     expect([byRef.ss9852.searchParams.has("signs"), byRef.ss9852.searchParams.get("filestyle")]).toEqual([false, "1"]);
     expect([byRef.ss9853.searchParams.has("signs"), byRef.ss9853.searchParams.get("filestyle"), byRef.ss9853.pathname.endsWith(".ass")]).toEqual([false, "1", true]);
+    expect(answer.subtitles.some((t) => new URL(t.url).searchParams.has("own"))).toBe(false);
+  }, 20000);
+
+  it("carries Keep the subtitle's own styling in the file's style's links, so switching it is a new link", async () => {
+    const arabic = sub(9854, "Show S01E06 1080p WEB", { language: "arabic" });
+    sites((url) => subsource(url, { arabic: [arabic] }, {}, 152) ?? cinemeta(url));
+    await fileWithTrack("Show.S01E06.Typeset.mkv", dialogue(52), { audioLang: "eng" });
+    const answer = await list({ subsource: "sk_signs_style_key_52", aiostreams: AIO, languages: ["Arabic"], allowMachine: false, hearingImpaired: "include", ownStyle: true, keepAss: true }, "tt0000852:1:6", playing("Show.S01E06.Typeset.mkv"));
+    const url = new URL(answer.subtitles.find((t) => refOfTrack(t) === "ss9854")!.url);
+    expect([url.searchParams.get("filestyle"), url.searchParams.get("own")]).toEqual(["1", "1"]);
   }, 20000);
 
   it("labels English Dub \"Signs\" once signs are found for the playing file, and only then", async () => {
@@ -1240,7 +1267,7 @@ describe("signs & songs and the file's own style", () => {
     await mkdir(path.join(process.cwd(), CACHE, "signs"), { recursive: true });
     await writeFile(
       path.join(process.cwd(), CACHE, "signs", `${cacheKey({ kind: "signs", videoId: video, filename: file })}.json`),
-      JSON.stringify({ found: true, at: Date.now(), release: "[Group] Show - 05", signsName: "Full Subtitles", signs: "at000f8699", partner: "at000f8699", events: 1, script: SIGNS })
+      JSON.stringify({ found: true, at: Date.now(), release: "[Group] Show - 05", signsName: "Full Subtitles", signs: "at000f8699", partner: "at000f8699", version: 2, events: 1, script: SIGNS })
     );
     const token = seal({ subsource: "sk_signs_unsettled_k57", languages: ["English"], allowMachine: false, hearingImpaired: "include", signs: true });
     const res = await realFetch(`${base}/${token}/download/ss9859/subtitle.ass?${new URLSearchParams({ season: "1", episode: "5", vid: video, type: "series", file, signs: "1" })}`);
@@ -1509,6 +1536,18 @@ describe("a link that keeps ASS styling", () => {
     const srtBody = await plain.text();
     expect(srtBody).not.toContain("[Script Info]");
     expect(srtBody).toMatch(/^1\n\d\d:\d\d:\d\d,\d{3} --> /);
+
+    // A height alone, with the switch off: an ASS link for the height, and plain lines placed that high.
+    const heightOnly = await list({ ...settings, styles: [{ scope: "all" as const, up: 15 }] }, "tt0000741:1:5", playing("Show.S01E05.Ass.mkv"));
+    const heightLink = new URL(heightOnly.subtitles[0].url);
+    expect([heightLink.pathname.endsWith("/subtitle.ass"), heightLink.searchParams.get("raise"), heightLink.searchParams.has("own")]).toEqual([true, "15", false]);
+    const heightBody = await (await realFetch(heightOnly.subtitles[0].url.replace("https://sync.example", base))).text();
+    expect(heightBody).not.toContain("Style: Raised");
+    expect(heightBody).toMatch(/^Style: Default,Arial,20,/m);
+    // With it on, the upload's own styling comes first, moved up by the height.
+    const heightKept = await list({ ...settings, keepAss: true, styles: [{ scope: "all" as const, up: 15 }] }, "tt0000741:1:5", playing("Show.S01E05.Ass.mkv"));
+    expect(new URL(heightKept.subtitles[0].url).searchParams.get("own")).toBe("1");
+    expect(await (await realFetch(heightKept.subtitles[0].url.replace("https://sync.example", base))).text()).toContain("Style: Raised,Arial,60,");
   }, 20000);
 });
 
@@ -1673,8 +1712,10 @@ describe("styles", () => {
     expect(flat).toMatch(/^Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,3,2,0,2,10,10,12,1$/m);
     expect(flat).toContain(",Default,,0,0,0,,Hello");
     expect(flat).not.toContain("Placeholder Font");
-    // An unknown look is no look: the upload keeps its own.
-    expect(toAss(own, ".ass", undefined, "neon", false)).toBe(own);
+    // An unknown look is no look: the plain look, as for no look at all; the upload keeps its own only with `own`.
+    expect(toAss(own, ".ass", undefined, "neon", false)).toBe(toAss(own, ".ass", undefined, undefined, false));
+    expect(toAss(own, ".ass", undefined, undefined, false)).toMatch(/^Style: Default,Arial,20,&H00FFFFFF,/m);
+    expect(toAss(own, ".ass", undefined, "neon", true)).toBe(own);
   });
 
   it("put a title's look and height in its links, which the download draws", async () => {
