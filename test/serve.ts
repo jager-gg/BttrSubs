@@ -36,7 +36,7 @@ export interface Scenario {
   build: () => { record: FileAnchors; subtitle: SubLine[] };
 }
 
-export type Method = "shift" | "rate" | "lines" | "starts" | "speech" | "unsynced" | "wrong" | "failed";
+export type Method = "shift" | "rate" | "lines" | "starts" | "cover" | "speech" | "unsynced" | "wrong" | "failed";
 
 export interface Outcome {
   name: string;
@@ -70,7 +70,8 @@ const REASONS: Array<[RegExp, string]> = [
 ];
 
 export interface Bench {
-  serve(scenario: Scenario): Promise<Outcome>;
+  /** `on`: a name for the file played, so that several scenarios are subtitles of one file (their records the same). */
+  serve(scenario: Scenario, on?: string): Promise<Outcome>;
   close(): Promise<void>;
 }
 
@@ -86,12 +87,12 @@ export async function openBench(dir: string): Promise<Bench> {
   await rm(cachePath(), { recursive: true, force: true });
   let served = 0;
 
-  async function serve(scenario: Scenario): Promise<Outcome> {
+  async function serve(scenario: Scenario, on?: string): Promise<Outcome> {
     const { record, subtitle } = scenario.build();
     // Subtitle files list their lines by start; retiming keeps that order, so line k stays line k.
     const lines = [...subtitle].sort((a, b) => a.start - b.start);
     const n = ++served;
-    const filename = `Show.S01E${String(n).padStart(2, "0")}.${scenario.name}.mkv`;
+    const filename = on ? `Show.${on}.mkv` : `Show.S01E${String(n).padStart(2, "0")}.${scenario.name}.mkv`;
     await mkdir(cachePath("anchors"), { recursive: true });
     await writeFile(path.join(cachePath("anchors"), `${cacheKey({ kind: "file-anchors", filename })}.json`), JSON.stringify({ ...record, filename }));
     await mkdir(cachePath("bench"), { recursive: true });
@@ -119,7 +120,7 @@ export async function openBench(dir: string): Promise<Bench> {
       globalThis.fetch = quiet.fetch;
     }
     const ms = Date.now() - started;
-    const method: Method = !result ? "failed" : result.noFit ? "wrong" : result.anchors.length === 0 ? "unsynced" : result.byLines ? "lines" : result.byStarts ? "starts" : result.bySpeech ? "speech" : result.factor ? "rate" : "shift";
+    const method: Method = !result ? "failed" : result.noFit ? "wrong" : result.anchors.length === 0 ? "unsynced" : result.byLines ? "lines" : result.byStarts ? "starts" : result.byCover ? "cover" : result.bySpeech ? "speech" : result.factor ? "rate" : "shift";
     const synced = Boolean(result && result.anchors.length > 0);
     // The first reason it gives is the cause; later lines follow from it.
     const why = synced

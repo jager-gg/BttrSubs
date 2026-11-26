@@ -170,6 +170,7 @@ function methodOf(r: SyncResult | undefined): string {
   if (r.bySpeech) return "speech";
   if (r.byLines) return "lines";
   if (r.byStarts) return "starts";
+  if (r.byCover) return "cover";
   if (r.factor && r.factor !== 1) return `rate x${r.factor.toFixed(4)}`;
   return "shift";
 }

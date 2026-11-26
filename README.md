@@ -173,6 +173,7 @@ Set these in `.env`. Most can also be changed on the dashboard without a restart
 | `ALLOWED_AIOSTREAMS` | public instances | The other AIOStreams instances accepted, as comma-separated origins. Set it to your own to accept only that one | Yes |
 | `OPENSUBTITLES_API_KEY` | none | OpenSubtitles' own API key, one for the whole server. With it, machine translations from OpenSubtitles are recognised and can be left out | Yes |
 | `LIST_BUDGET_MS` | `8000` | How long a subtitle list may take before it answers with what it has, in ms | Yes |
+| `FILE_WAIT_MS` | `1500` | How much longer a list may wait for a slow-opening file to be read and its tracks timed, in ms | No |
 | `MAX_SUBTITLES_PER_LANGUAGE` | `3` | The most subtitles a configuration may list for one language, 1 to 3 | Yes |
 | `DAILY_READ_GB` | `20` | The most data read from playing files in a day, across everyone. `0` for no limit | Yes |
 | `PRIVATE_STREAM_HOSTS` | none | Hosts on a private network that playing files may be read from, such as a stream proxy on your LAN | Yes |
@@ -282,7 +283,8 @@ docker exec bttr-subs node dist/debugMark.js status
 
 - **The logs.** `docker compose logs` shows the container's log since it last started, and an update replaces the container. BttrSubs also keeps its log in the cache volume (`logs`, one file per UTC day), so it survives updates. **Settings → Data → Download logs** gives it as one file. Addresses in it keep only their host and long tokens are cut, but it names what was played, so read it before you share it.
 - **A subtitle opens with "the file playing isn't in your AIOStreams list any more".** BttrSubs couldn't find the file you played, usually because a release failed and AIOStreams switched to another one. Pick the stream again, or another one. If you watch in Stremio, link your account in AIOStreams (step 1 above): BttrSubs can then ask for the same list Stremio was given.
-- **A track shows one line, "no subtitle found for this track fits this file".** None of the subtitles found for that language could be matched to your file, for example because they were timed to a different cut of it.
+- **A track shows only the line "this subtitle's source didn't answer".** The subtitle site gave no answer in time. Pick the track again in a minute.
+- **A track shows only the line "no subtitle found for this track fits this file", once a minute.** None of the subtitles found for that language could be matched to your file, for example because they were timed to a different cut of it.
 - **`the file's host refused reads` in the logs.** The debrid or usenet host answered 429, or 403 three times in a row. Reads from that host pause for 5 minutes, doubling up to an hour if it keeps refusing. Subtitles are listed unsynced in the meantime.
 - **Changes don't show up.** AIOStreams caches subtitle lists. Clear its `subtitles` cache. If you use AIOMetadata, restart it too: it caches them for an hour.
 

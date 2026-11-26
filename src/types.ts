@@ -68,6 +68,8 @@ export interface SubSourceSubtitle {
   source?: "subsource" | "subdl" | "opensubtitles" | "addon" | "subtitlecat" | "thesubtitledb" | "gestdown" | "animetosho" | "tsukihime" | "aninzb" | "wyzie" | "kept";
   /** An added addon's subtitle URL, sealed (see sealUrl): it may carry that addon's keys. */
   sealedUrl?: string;
+  /** Whether it is an ASS or SSA script, where its source says so before it is fetched: one file, one format. */
+  styled?: boolean;
   /** The source already searched for this episode, so the result is for it. */
   episodeTrusted?: boolean;
   /** The source matched it to the playing file's hash (the player's videoHash): it was made for this very file. */

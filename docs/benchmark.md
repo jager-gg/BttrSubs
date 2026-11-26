@@ -102,7 +102,7 @@ Dub captions come in two models:
 | `recap-dub-index` | Dub captions for a release without the 45 s recap this file opens with. |
 | `recap-dub-windows` | The same on a file read in windows. |
 | `broadcast-dub-lines-index` | A broadcast's dub captions on a disc's file, whose opening song runs 50 s longer (with its own lines in two scripts) and whose break card is 4 s longer: on time before the song, 50 s off after it, 54 s off after the break. The captions are written line for line with the original's, most lines starting within a beat of the file's. |
-| `broadcast-dub-index` | The same broadcast and file, with dub captions whose lines are their own (only a stretch of talk starts where the file's does). A known gap. |
+| `broadcast-dub-index` | The same broadcast and file, with dub captions whose lines are their own (only a stretch of talk starts where the file's does): timed in stretches by the moments its lines fill. |
 | `dub-speech` | Dub captions on a file with no subtitle track, timed by the dub's speech. |
 
 **Timed by hand to another recording**

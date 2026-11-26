@@ -231,6 +231,21 @@ describe("subtitles matched to the playing file's hash", () => {
     expect(matching.filterAndRankDubtitles(folded, hashed, { requireDub: false }).map((s) => s.ref)).not.toContain("osar-3");
   });
 
+  it("leaves out a TheSubtitleDB row that is an OpenSubtitles row's upload: the same id in the same language", () => {
+    const os = (code: string, id: number, language: string) => sub({ ref: `os${code}-${id}`, source: "opensubtitles", language, hearingImpaired: true });
+    const tb = (id: number, language: string) => sub({ ref: `tb${id}`, source: "thesubtitledb", language });
+    const other = sub({ ref: "sd7-7", source: "subdl", language: "english" });
+    const list = [tb(7, "english"), os("en", 7, "english"), tb(8, "english"), other, os("ar", 9, "arabic"), tb(9, "english"), tb(9, "Arabic")];
+    // The OpenSubtitles row stays where it ranks, with its own flags; the copy goes wherever it stands.
+    expect(sources.withoutCopies(list).map((s) => s.ref)).toEqual(["osen-7", "tb8", "sd7-7", "osar-9", "tb9"]);
+    expect(sources.withoutCopies(list).find((s) => s.ref === "tb9")?.language).toBe("english");
+    // Nothing of OpenSubtitles' in the list: every row stays, as the same list.
+    const alone = [tb(7, "english"), other];
+    expect(sources.withoutCopies(alone)).toBe(alone);
+    // Another source's row with a ref shaped like either is no copy.
+    expect(sources.withoutCopies([os("en", 7, "english"), sub({ ref: "tb7", source: "addon", language: "english" })]).map((s) => s.ref)).toEqual(["osen-7", "tb7"]);
+  });
+
   it("ranks a hash match above a release-name match", () => {
     const named = { subtitleId: 0, movieId: 0, language: "arabic", files: 1, downloads: 0, rating: null, episodeTrusted: true } as const;
     const ranked = matching.filterAndRankDubtitles([
@@ -699,10 +714,10 @@ describe("the voice detector", () => {
 
 describe("languages the file already has", () => {
   const sub = (index: number, language: string, codec = "subrip", title = "", forced = 0) => ({ index, codec_type: "subtitle", codec_name: codec, tags: { language, title }, disposition: { forced } });
-  it("counts full text tracks only, not signs, forced lines or pictures", async () => {
-    const { fullTextLanguages } = await import("../src/sync.js");
-    expect(fullTextLanguages([sub(2, "eng", "subrip", "SDH"), sub(3, "eng", "subrip", "Stripped"), sub(4, "ara"), sub(5, "spa", "ass", "Signs"), sub(6, "fre", "subrip", "", 1), sub(7, "ger", "hdmv_pgs_subtitle"), sub(8, "und")])).toEqual(["eng", "ara"]);
-    expect(fullTextLanguages([{ index: 1, codec_type: "audio", codec_name: "aac", tags: { language: "eng" } }])).toEqual([]);
+  it("counts full tracks, text and picture, not signs or forced lines", async () => {
+    const { fullSubtitleLanguages } = await import("../src/sync.js");
+    expect(fullSubtitleLanguages([sub(2, "eng", "subrip", "SDH"), sub(3, "eng", "subrip", "Stripped"), sub(4, "ara"), sub(5, "spa", "ass", "Signs"), sub(6, "fre", "subrip", "", 1), sub(7, "ger", "hdmv_pgs_subtitle"), sub(8, "ita", "dvd_subtitle"), sub(9, "dut", "hdmv_pgs_subtitle", "Forced"), sub(10, "und")])).toEqual(["eng", "ara", "ger", "ita"]);
+    expect(fullSubtitleLanguages([{ index: 1, codec_type: "audio", codec_name: "aac", tags: { language: "eng" } }])).toEqual([]);
   });
 
   it("skips them by default, links made before the option included, and lists them when asked", async () => {

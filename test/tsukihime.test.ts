@@ -46,6 +46,34 @@ function service(answers: Record<string, unknown>, asked: string[] = []) {
 describe("an episode's subtitles from its releases' own tracks", () => {
   const request = (n: number, extra: Record<string, unknown> = {}) => ({ type: "series", id: `tt90000${n}:2:7`, imdbId: `tt90000${n}`, season: 2, episode: 7, ...extra }) as never;
 
+  it("asks for its releases side by side, and for the episode's list ahead of the look-up", async () => {
+    placed = { anidbId: 15391, episode: 7, run: false };
+    const releases = [1, 2, 3, 4].map((n) => ({ id: 9100 + n, name: `[Group${n}] Side Show - 07 [1080p]`, totalsize: 100 + n, audiolangs: ["ja"], sublangs: ["en"] }));
+    const asked: string[] = [];
+    let open = 0;
+    let most = 0;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const pathAsked = url.pathname.replace(/^\/v1/, "");
+      asked.push(pathAsked);
+      if (pathAsked === "/animes/anidb/15391") return json({ id: 6791 });
+      if (pathAsked === "/animes/6791/episodes/7") return json({ results: releases });
+      const release = releases.find((r) => pathAsked === `/torrents/${r.id}`);
+      if (!release) return json({ error: true }, 404);
+      most = Math.max(most, ++open);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      open--;
+      return json({ files: [{ id: release.id, filename: `${release.name}.mkv`, attachments: [track(release.id * 10, "en")] }] });
+    });
+    // The list's start asks for the episode's releases; the look-up after it asks for them no second time.
+    source.tsukihimeAhead(request(91));
+    const rows = await source.tsukihimeSubtitles(request(91), "Side Show", ["english"]);
+    expect(asked.filter((p) => p.startsWith("/animes/"))).toEqual(["/animes/anidb/15391", "/animes/6791/episodes/7"]);
+    // Three at a time, as its pace lets through, and given in the order asked.
+    expect(most).toBe(3);
+    expect(rows.map((r) => r.ref)).toEqual(["th91010", "th91020", "th91030", "th91040"]);
+  });
+
   it("finds the episode by the show's AniDB entry and gives each wanted language's full track, the playing release first", async () => {
     const asked = service({
       "/animes/anidb/15305": { id: 6730 },
@@ -119,6 +147,99 @@ describe("an episode's subtitles from its releases' own tracks", () => {
     const same = source.sameLanguage;
     expect([same("en", "en"), same("zh-Hans", "zh-cn"), same("zh-Hant", "zh-tw"), same("zh", "zh-cn"), same("pt-BR", "pt-br"), same("pt", "pt-pt"), same("es-419", "es")]).toEqual([true, true, true, true, true, true, true]);
     expect([same("zh-Hans", "zh-tw"), same("pt-BR", "pt-pt"), same("pt", "pt-br"), same("de", "nl"), same(undefined, "en")]).toEqual([false, false, false, false, false]);
+  });
+});
+
+describe("the dub's captions from the dub's own releases", () => {
+  const request = (n: number) => ({ type: "series", id: `tt90001${n}:2:7`, imdbId: `tt90001${n}`, season: 2, episode: 7 }) as never;
+  // Five releases with more subtitle languages than the dub's own, which has one: by language alone it gets no place.
+  const many = (id: number) => ({ id, name: `[Subs${id}] Show - 07 [1080p]`, audiolangs: ["ja"], sublangs: ["en", "ar", "fr", "de"] });
+  const translations = Object.fromEntries([921, 922, 923, 924, 925].map((id) => [`/torrents/${id}`, { files: [{ id, filename: `[Subs${id}] Show - 07 [1080p].mkv`, attachments: [track(id * 10, "en", "English")] }] }]));
+
+  it("opens the release whose only audio is English beside the ones picked by language, and takes its one English track as captions, named so or not", async () => {
+    placed = { anidbId: 25311, episode: 7, run: false };
+    const asked = service({
+      "/animes/anidb/25311": { id: 6741 },
+      "/animes/6741/episodes/7": {
+        results: [
+          ...[921, 922, 923, 924, 925].map(many),
+          { id: 931, name: "[Dubs] Show - S02E07 [English Dub] [WEB 1080p] [0A1B2C3D]", audiolangs: ["en"], sublangs: ["en"], animetosho: true },
+          // The same release at another picture size: no place of its own.
+          { id: 932, name: "[Dubs] Show - S02E07 [English Dub] [WEB 720p] [4E5F6A7B]", audiolangs: ["en"], sublangs: ["en"], animetosho: true },
+          { id: 933, name: "[Dual] Show - 07 [Dual Audio]", audiolangs: ["ja", "en"], sublangs: ["en"] }
+        ]
+      },
+      ...translations,
+      "/torrents/931": { animetosho: true, audiolangs: ["en"], files: [{ id: 931, filename: "[Dubs] Show - S02E07 [English Dub] [WEB 1080p] [0A1B2C3D].mkv", attachments: [font, track(9311, "en-US", "")] }] },
+      // A dual-audio file's plain English track is the translation; its captions are named.
+      "/torrents/933": { audiolangs: ["ja", "en"], files: [{ id: 933, filename: "[Dual] Show - 07 [Dual Audio].mkv", attachments: [track(9331, "en", "English"), track(9332, "en", "English [CC]")] }] }
+    });
+    const got = await source.tsukihimeSubtitles(request(1), "Show", ["english"]);
+    expect(asked.filter((p) => p.startsWith("/torrents/")).sort()).toEqual(["/torrents/921", "/torrents/922", "/torrents/923", "/torrents/924", "/torrents/931", "/torrents/933"]);
+    const captions = got.filter(source.isDubCaptions).map((s) => s.ref);
+    expect(captions.sort()).toEqual(["th9332", "tht9311"]);
+    expect(got.find((s) => s.ref === "tht9311")!.commentary).toBe('English Dub captions: the release\'s own "English" track');
+    expect(source.isDubCaptions(got.find((s) => s.ref === "th9331")!)).toBe(false);
+    // The list's own word for each release: three of them could hold the dub's captions.
+    expect(await source.dubReleasesListed(request(1))).toBe(3);
+  });
+
+  it("gives the dub's releases no place when English isn't asked for, and counts none where no release has English audio and an English track", async () => {
+    placed = { anidbId: 25312, episode: 7, run: false };
+    const asked = service({
+      "/animes/anidb/25312": { id: 6742 },
+      "/animes/6742/episodes/7": {
+        results: [
+          { id: 941, name: "[Subs] Show - 07", audiolangs: ["ja"], sublangs: ["en", "ar"] },
+          // English voices with no subtitle track, and English subtitles with no English voices.
+          { id: 942, name: "[Dubs] Show - S02E07 [English Dub]", audiolangs: ["en"], sublangs: [] },
+          { id: 943, name: "[Raw] Show - 07", audiolangs: ["ja"], sublangs: ["en"] }
+        ]
+      },
+      "/torrents/941": { files: [{ id: 941, filename: "[Subs] Show - 07.mkv", attachments: [track(9411, "ar", "Arabic")] }] }
+    });
+    const got = await source.tsukihimeSubtitles(request(2), "Show", ["arabic"]);
+    expect(got.map((s) => s.ref)).toEqual(["th9411"]);
+    expect(asked.filter((p) => p.startsWith("/torrents/"))).toEqual(["/torrents/941"]);
+    expect(await source.dubReleasesListed(request(2))).toBe(0);
+    // An episode the lists don't place has no list to count in.
+    placed = undefined;
+    expect(await source.dubReleasesListed(request(3))).toBeUndefined();
+  });
+});
+
+describe("an episode's signs from its releases' own tracks", () => {
+  const request = { type: "series", id: "tt9000201:2:7", imdbId: "tt9000201", season: 2, episode: 7 } as never;
+
+  it("gives each release's signs track with the dialogue track that times it, a disc's release first for a disc's file, and a full track once two releases gave no signs track", async () => {
+    placed = { anidbId: 25321, episode: 7, run: false };
+    const asked = service({
+      "/animes/anidb/25321": { id: 6751 },
+      "/animes/6751/episodes/7": {
+        results: [
+          { id: 961, name: "[Web] Show - 07 [WEB 1080p]", audiolangs: ["ja"], sublangs: ["en"] },
+          { id: 962, name: "[Disc] Show - 07 [BD 1080p] [Dual Audio]", audiolangs: ["ja", "en"], sublangs: ["en"] },
+          { id: 963, name: "[Raw] Show - 07", audiolangs: ["ja"], sublangs: [] },
+          { id: 964, name: "[Dub] Show - 07 [WEB 720p]", audiolangs: ["ja", "en"], sublangs: ["en"], animetosho: true }
+        ]
+      },
+      // A full track only: held until a second release has given no signs track either.
+      "/torrents/961": { files: [{ id: 1, filename: "[Web] Show - 07 [WEB 1080p].mkv", attachments: [track(9611, "en", "English")] }] },
+      // The dub's captions are no dialogue to time signs by: the plain track is.
+      "/torrents/962": { files: [{ id: 2, filename: "[Disc] Show - 07 [BD 1080p] [Dual Audio].mkv", attachments: [font, track(9621, "en", "English [CC]"), track(9622, "en", "Signs & Songs"), track(9623, "en", "English"), track(9624, "ar", "Arabic")] }] },
+      // A forced track is a signs track; a track that isn't ASS can't be shown as signs.
+      "/torrents/964": { animetosho: true, files: [{ id: 4, filename: "[Dub] Show - 07 [WEB 720p].mkv", attachments: [track(9641, "en", "", { forced: 1 }), track(9642, "en", "Dialogue"), track(9643, "en", "Songs", { codec: "SRT" })] }] }
+    });
+    const found = [];
+    for await (const given of source.tsukihimeSigns(request, "Show", "Show.S02E07.BluRay.1080p-TEAM.mkv")) found.push(given);
+    // The disc's release first (the playing file is a disc's), then the other with the dub, then the web one's full track.
+    expect(asked.filter((p) => p.startsWith("/torrents/"))).toEqual(["/torrents/962", "/torrents/964", "/torrents/961"]);
+    expect(found.map((s) => [s.signs, s.partner, s.full, s.signsName])).toEqual([
+      ["th9622", "th9623", false, "Signs & Songs"],
+      ["tht9641", "tht9642", false, "Signs"],
+      ["th9611", "th9611", true, "English"]
+    ]);
+    expect(found[0].release).toBe("[Disc] Show - 07 [BD 1080p] [Dual Audio]");
   });
 });
 

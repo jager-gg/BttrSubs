@@ -31,9 +31,9 @@ const record = (source: string, over: Record<string, unknown> = {}) => ({
 });
 
 describe("AIOStreams' record of a file", () => {
-  it("gives full text subtitle languages, audio languages and length, from a record measured from the file", () => {
-    expect(factsOfListed(record("local"))).toEqual({ textLangs: ["en", "pt-br"], audioLangs: ["en", "ja"], duration: 1_422_700 });
-    expect(factsOfListed(record("stremthru"))?.textLangs).toEqual(["en", "pt-br"]);
+  it("gives the languages of its full subtitles, text and picture, audio languages and length, from a record measured from the file", () => {
+    expect(factsOfListed(record("local"))).toEqual({ ownLangs: ["en", "ar", "pt-br"], audioLangs: ["en", "ja"], duration: 1_422_700 });
+    expect(factsOfListed(record("stremthru"))?.ownLangs).toEqual(["en", "ar", "pt-br"]);
   });
 
   it("is nothing from a record matched by name or from nowhere, or no record at all", () => {
@@ -44,7 +44,7 @@ describe("AIOStreams' record of a file", () => {
 
   it("leaves a subtitle language it doesn't know out, and counts such an audio one as unknown", () => {
     const facts = factsOfListed(record("local", { audioTracks: [{ lang: "Klingon" }], subtitleTracks: [{ lang: "Klingon", codec: "subrip" }] }));
-    expect(facts).toMatchObject({ textLangs: [], audioLangs: ["und"] });
+    expect(facts).toMatchObject({ ownLangs: [], audioLangs: ["und"] });
   });
 });
 
@@ -57,7 +57,7 @@ describe("a lookup's record of the playing file", () => {
     const fetch = listing([stream("Show.S01E07.Listed.mkv", 1000, record("local")), stream("Show.S01E07.Other.mkv", 2000, record("local", { audioTracks: [{ lang: "Japanese" }] }))]);
     await streamCandidates(AIO, "tt0000006:1:7", "series", file);
     expect(new Headers((fetch.mock.calls[0][1] as RequestInit).headers).get("User-Agent")).toMatch(/^AIOStreams\//);
-    expect(await embeddedLanguages(file, 0)).toEqual(["en", "pt-br"]);
+    expect(await embeddedLanguages(file, 0)).toEqual(["en", "ar", "pt-br"]);
     expect(await hasEnglishVoices(file, 0)).toBe(true);
     expect(await fileDuration(file)).toBe(1_422_700);
   });

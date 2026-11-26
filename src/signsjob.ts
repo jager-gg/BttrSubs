@@ -11,6 +11,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { cacheKey, cachePath, writeFileAtomic } from "./cache.js";
 import { animeToshoSigns, type SignsSource, type Tier } from "./animetosho.js";
+import { tsukihimeSigns } from "./tsukihime.js";
 import { getCachedSubtitleFile } from "./downloads.js";
 import { eventCount, ownStyleOf, parseScript, signsOfFull, writeScript, type OwnStyle, type Script } from "./signs.js";
 import { laidOutForPlayers } from "./respace.js";
@@ -119,6 +120,25 @@ interface For {
   filename: string;
   /** A file a player asked about ahead of playing it: the whole look goes behind everything else. */
   ahead?: boolean;
+  /** Whether TsukiHime is among the configuration's sources: its list of the episode is searched first. */
+  tsukihime?: boolean;
+}
+
+/**
+ * The episode's signs sources, each once: TsukiHime's first where it is a source (its list of the
+ * episode answers in about a second and holds Anime Tosho's archive), then Anime Tosho's own search,
+ * which also finds releases no episode lists (a whole show's batch).
+ */
+async function* sourcesFor(input: For, lane: { tier: Tier }): AsyncGenerator<SignsSource> {
+  const given = new Set<string>();
+  const once = (source: SignsSource) => {
+    // A track is the same track whichever service it is fetched from: "at" and "tht" name one archive's.
+    const id = (ref: string) => (/^at[0-9a-f]+$/.test(ref) ? String(parseInt(ref.slice(2), 16)) : ref.replace(/^tht/, ""));
+    const key = `${id(source.signs)}|${id(source.partner)}`;
+    return given.has(key) ? false : (given.add(key), true);
+  };
+  if (input.tsukihime) for await (const source of tsukihimeSigns(input.request, input.show, fileName(input.filename))) if (once(source)) yield source;
+  for await (const source of animeToshoSigns(input.request, input.show, input.map, { tvdbId: input.tvdbId, filename: fileName(input.filename), lane })) if (once(source)) yield source;
 }
 
 /**
@@ -169,7 +189,7 @@ async function look(input: For, key: string, before: Kept | undefined, give: (ke
   let looked = 0;
   // Once there are signs, the look for better ones waits behind everything else, as does a file asked about ahead.
   const lane: { tier: Tier } = { tier: best || input.ahead ? "later" : "signs" };
-  for await (const source of animeToshoSigns(input.request, input.show, input.map, { tvdbId: input.tvdbId, filename: fileName(input.filename), lane })) {
+  for await (const source of sourcesFor(input, lane)) {
     // With signs in, only a signs track can do better.
     if (best && source.full) continue;
     if (looked++ >= SOURCES || tried >= TRIES) break;

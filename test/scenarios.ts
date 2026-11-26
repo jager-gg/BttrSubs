@@ -419,12 +419,7 @@ export const SCENARIOS: Scenario[] = [
     name: "broadcast-dub-index",
     about: "English dub captions from a broadcast on a disc's file: on time before the opening song, 50 s off after it (the disc's song runs longer) and 54 s off after the break",
     file: "index",
-    today: {
-      synced: false,
-      floor: { "0.3": 0.08, "0.1": 0.08 },
-      // A known gap: when this is served synced, set synced: true and raise the floor.
-      gap: "Dub captions whose lines start with the file's only where a stretch of talk starts, in three stretches: the run of shifts found with every other line meets too few of the lines left out (0.29 here, 0.45 asked) to be told from a run of chance fits, and no one shift holds for the file."
-    },
+    today: { synced: true, floor: { "0.3": 0.87, "0.1": 0.87 } },
     build: () => broadcastOnDisc()
   },
   {

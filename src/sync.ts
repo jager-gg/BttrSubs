@@ -25,7 +25,7 @@ import { dialogueLines, isTextCodec, pictureLines, readMkvTiming, readMkvTracks,
 import { readMp4Timing } from "./mp4.js";
 import { readFileHash } from "./oshash.js";
 import { openAudioWindow, type AudioWindow } from "./audiowindow.js";
-import { hearingTurn } from "./turns.js";
+import { hearingTurn, isWatched } from "./turns.js";
 import { viewerOf } from "./viewers.js";
 import { otherInstallUrls } from "./installUrls.js";
 import { jellyfinToken, linkedInstallUrls } from "./aiostreamsAccount.js";
@@ -199,11 +199,14 @@ export function retime(text: string, ext: string, delta: (start: number) => numb
   const scale = (ms: number) => Math.round(ms * factor);
   const ending = (start: number, last: number, d: number) => (end ? end(start, last) : last + d);
   if (isAss(ext)) {
-    return text.replace(/^(Dialogue:[^,]*,)(\d+:\d{2}:\d{2}\.\d{2}),(\d+:\d{2}:\d{2}\.\d{2})/gm, (_all, head, a, b) => {
+    const times = (head: string, a: string, b: string) => {
       const start = scale(assTime(a));
       const d = delta(start);
       return `${head}${formatAss(start + d)},${formatAss(ending(start, scale(assTime(b)), d))}`;
-    });
+    };
+    if (factor === 1) return text.replace(/^(Dialogue:[^,]*,)(\d+:\d{2}:\d{2}\.\d{2}),(\d+:\d{2}:\d{2}\.\d{2})/gm, (_all, head, a, b) => times(head, a, b));
+    // A line made longer or shorter keeps its own moments where they fall in it: see scaledTags.
+    return text.replace(/^(Dialogue:[^,]*,)(\d+:\d{2}:\d{2}\.\d{2}),(\d+:\d{2}:\d{2}\.\d{2})(.*)$/gm, (_all, head, a, b, rest) => `${times(head, a, b)}${scaledTags(rest, factor)}`);
   }
   return text.replace(/^.*-->.*$/gm, (line) => {
     const [a] = line.split("-->");
@@ -216,6 +219,31 @@ export function retime(text: string, ext: string, delta: (start: number) => numb
       return formatSrt(stamps++ === 1 ? ending(start, at, d) : at + d, sep);
     });
   });
+}
+
+/**
+ * An ASS line's tags with the moments they name within the line scaled by `factor`, as the line's own
+ * length is (a subtitle made for another frame rate): each karaoke syllable's length (\k, \kf, \ko, \K,
+ * in hundredths of a second, summed first so their rounding doesn't add up), and the start and end of a
+ * change (\t), a move (\move) and a fade set in four moments (\fade). A fade in and out (\fad) is a
+ * length at each end of the line, and stays.
+ */
+export function scaledTags(rest: string, factor: number): string {
+  let written = 0;
+  let sung = 0;
+  const at = (ms: string) => String(Math.round(Number(ms) * factor));
+  return rest.replace(/\{[^}]*\}/g, (block) =>
+    block
+      .replace(/\\(k[fo]?|K)(\d+)/g, (_m, tag: string, length: string) => {
+        sung += Number(length);
+        const scaled = Math.round(sung * factor) - written;
+        written += scaled;
+        return `\\${tag}${scaled}`;
+      })
+      .replace(/\\t\(\s*(-?\d+)\s*,\s*(-?\d+)\s*,/g, (_m, from: string, to: string) => `\\t(${at(from)},${at(to)},`)
+      .replace(/(\\move\((?:[^,)]*,){4})\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/g, (_m, places: string, from: string, to: string) => `${places}${at(from)},${at(to)})`)
+      .replace(/(\\fade\((?:[^,)]*,){3})\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/g, (_m, alphas: string, a: string, b: string, c: string, d: string) => `${alphas}${at(a)},${at(b)},${at(c)},${at(d)})`)
+  );
 }
 
 /** A line cut short to make room for the next is still shown this long, or as long as it was written for when that is less. */
@@ -495,9 +523,11 @@ const CHANGE_EVERY = 6;
 
 /**
  * The captions rescaled to the file's frame rate, when that is what fits: they then land at one shift
- * (within AGREE_MS) in at least RATE_MIN_ANCHORS windows spread over the file, where as written they
- * fit nowhere, or only with steps. A step mid-episode (a cut, a moved break) stays a step: it isn't a
- * straight line from start to end. Undefined when the captions already fit at one shift.
+ * (within AGREE_MS, or what a long file's creep allows) in at least RATE_MIN_ANCHORS windows spread
+ * over the file, where as written they fit nowhere, or only with steps. A step mid-episode (a cut, a
+ * moved break) stays a step: it isn't a straight line from start to end. Captions that fit nothing as
+ * written and, rescaled, fit in stretches (made for another rate from another cut) are rescaled too.
+ * Undefined when the captions already fit at one shift.
  */
 export function rescaled(found: FileAnchors, captions: Cue[], asWritten: Measurement): Rescaled | undefined {
   return finish(rescaledSteps(found, captions, asWritten));
@@ -507,26 +537,40 @@ export function rescaled(found: FileAnchors, captions: Cue[], asWritten: Measure
 function* rescaledSteps(found: FileAnchors, captions: Cue[], asWritten: Measurement): Steps<Rescaled | undefined> {
   if (found.speechOnly || !found.duration) return undefined;
   if (trusted(asWritten) && spread(asWritten.anchors) <= AGREE_MS) return undefined;
-  let best: (Rescaled & { score: number }) | undefined;
+  let best: (Rescaled & { score: number; apart: number }) | undefined;
   for (const factor of RATE_FACTORS) {
     yield;
     const scaled = scaleCues(captions, factor);
     const m = measureAll(found, scaled);
-    if (m.anchors.length < RATE_MIN_ANCHORS || !trusted(m) || spread(m.anchors) > AGREE_MS) continue;
+    if (m.anchors.length < RATE_MIN_ANCHORS || !trusted(m)) continue;
     // Drift only shows across the file: the anchors must reach from its early part to its late part.
     const sorted = [...m.anchors].sort((a, b) => a.from - b.from);
-    if (sorted[sorted.length - 1].to - sorted[0].from < found.duration * RATE_MIN_REACH) continue;
+    const reach = sorted[sorted.length - 1].to - sorted[0].from;
+    if (reach < found.duration * RATE_MIN_REACH) continue;
+    // One shift: within AGREE_MS, or within what the stretch they reach over can creep at this rate
+    // and still not be the next one (RATE_CREEP). Further apart, the rescaled captions have steps of
+    // their own (another rate and another cut at once): taken only where as written they fit nothing
+    // (steps that fit as written are a cut, not a rate) and rescaled they fit in more windows (lines
+    // timed by hand to another recording fit a window here and there at any rate).
+    const apart = spread(m.anchors);
+    if (apart > Math.max(AGREE_MS, reach * RATE_CREEP) && (trusted(asWritten) || m.anchors.length <= asWritten.anchors.length)) continue;
     // Steps that fit as written, in more windows, are kept: a real cut isn't a drift.
     if (trusted(asWritten) && asWritten.anchors.length > m.anchors.length) continue;
-    // Line starts must meet at that one shift too (see lineStartFit).
+    // Line starts must meet at that one shift too (see lineStartFit); where the timing creeps or steps, along it.
     const median = [...m.anchors.map((a) => a.offset)].sort((a, b) => a - b)[Math.floor(m.anchors.length / 2)];
-    const lines = lineStartFit(found, scaled, median);
-    if (lines.score < RATE_MIN_LINE_SCORE || lines.margin < RATE_MIN_LINE_MARGIN) continue;
+    const creeps = apart > AGREE_MS;
+    const lines = creeps ? lineStartFitAlong(found, scaled, m.anchors) : lineStartFit(found, scaled, median);
+    if (lines.score < RATE_MIN_LINE_SCORE || lines.margin < (creeps ? RATE_MIN_ALONG_MARGIN : RATE_MIN_LINE_MARGIN)) continue;
     const score = m.anchors.reduce((sum, a) => sum + a.score, 0);
-    if (!best || m.anchors.length > best.anchors.length || (m.anchors.length === best.anchors.length && score > best.score)) best = { ...m, factor, captions: scaled, score };
+    // Between a rate and the one next to it (they run RATE_CREEP * 2 apart, and a window a minute long
+    // fits at either), the one whose shifts lie closer together: the other's drift spreads them.
+    // Otherwise the most windows, then the fuller overlap.
+    const beside = best !== undefined && Math.abs(factor - best.factor) <= RATE_CREEP * 4;
+    const better = !best || (beside ? apart < best.apart : m.anchors.length > best.anchors.length || (m.anchors.length === best.anchors.length && score > best.score));
+    if (better) best = { ...m, factor, captions: scaled, score, apart };
   }
   if (!best) return undefined;
-  const { score: _score, ...result } = best;
+  const { score: _score, apart: _apart, ...result } = best;
   return result;
 }
 
@@ -550,6 +594,38 @@ export function lineStartFit(found: FileAnchors, captions: Cue[], offset: number
     const distance = Math.abs(i - centre) * LINE_STEP_MS;
     if (distance <= AGREE_MS) score = Math.max(score, at(i));
     else if (distance > 1000) rival = Math.max(rival, at(i));
+  }
+  return { score: Math.round(score * 100) / 100, margin: Math.round((score - rival) * 100) / 100 };
+}
+
+/**
+ * lineStartFit along a timing: each window's line starts are held at the shift the timing gives that
+ * window (its nearest anchor's), and the rival is the whole timing moved by more than a second. A
+ * timing that creeps over a long file is so scored stretch by stretch, where one shift for the whole
+ * file would meet only the part of it that shift is right for.
+ */
+export function lineStartFitAlong(found: FileAnchors, captions: Cue[], anchors: Anchor[], range = 20000): { score: number; margin: number } {
+  if (anchors.length === 0) return { score: 0, margin: 0 };
+  const starts = captionStarts(captions);
+  const steps = Math.round((2 * range) / LINE_STEP_MS) + 1;
+  const along = new Int32Array(steps);
+  const timingAt = (from: number) => anchors.reduce((a, b) => (Math.abs(b.from - from) < Math.abs(a.from - from) ? b : a)).offset;
+  let total = 0;
+  for (const w of found.windows) {
+    if (w.bridge || w.cues.length < 3) continue;
+    total += w.cues.length;
+    const curve = startCurve(w.cues, starts, range);
+    const by = Math.round(timingAt(w.from) / LINE_STEP_MS);
+    for (let i = Math.max(0, -by); i < steps && i + by < steps; i++) along[i] += curve[i + by];
+  }
+  if (total === 0) return { score: 0, margin: 0 };
+  const centre = (steps - 1) / 2;
+  let score = 0;
+  let rival = 0;
+  for (let i = 0; i < steps; i++) {
+    const distance = Math.abs(i - centre) * LINE_STEP_MS;
+    if (distance <= LINE_TOLERANCE_MS) score = Math.max(score, along[i] / total);
+    else if (distance > 1000) rival = Math.max(rival, along[i] / total);
   }
   return { score: Math.round(score * 100) / 100, margin: Math.round((score - rival) * 100) / 100 };
 }
@@ -626,6 +702,21 @@ const LINE_TOLERANCE_MS = 200;
 /** What a rescaled fit needs from lineStartFit. */
 const RATE_MIN_LINE_SCORE = 0.35;
 const RATE_MIN_LINE_MARGIN = 0.25;
+/**
+ * The margin a rescaled fit that creeps or steps needs from lineStartFitAlong. Calibration (37,857
+ * pairs of a file and another episode's or title's subtitle, and every past play): of the wrong pairs'
+ * 808 rescaled fits that reach this test, the best scores 0.21 with a margin of 0.06; the right ones
+ * score 0.39 to 0.77 with margins of 0.24 to 0.60.
+ */
+const RATE_MIN_ALONG_MARGIN = 0.15;
+
+/**
+ * How far a timing may creep, per millisecond of the file, and still be at its frame rate: half of what
+ * the two nearest rates (RATE_FACTORS, and the captions as written) run apart. Over a long file the
+ * windows of rightly rescaled captions sit further apart than AGREE_MS (a transfer a touch off its
+ * nominal rate, lines split otherwise than the file's), yet nowhere near the next rate's drift.
+ */
+const RATE_CREEP = Math.min(...[1, ...RATE_FACTORS].flatMap((a, i, all) => all.slice(i + 1).map((b) => Math.abs(a - b)))) / 2;
 
 /** The fewest windows that must agree on one shift after rescaling. */
 const RATE_MIN_ANCHORS = 3;
@@ -645,6 +736,76 @@ function overlap(a: Cue[], b: Cue[], shift: number): number {
     }
   }
   return total;
+}
+
+/** wholeOverlaps' tables, kept between calls: allocating them costs more than filling them. */
+let tables = { weights: new Float64Array(0), moments: new Float64Array(0) };
+
+/**
+ * overlap(a, b, shift) at every shift from -range to range in 5 ms steps, at once: index m holds the
+ * shift -range + 5 m. Only for whole milliseconds, with a and b sorted by start; otherwise undefined.
+ *
+ * The overlap of two lines, as one is shifted, rises, holds and falls in straight lines: it is the sum
+ * of four ramps max(0, shift - p) starting where an edge of one line meets an edge of the other, with
+ * weights +1 (start meets end, end meets start) and -1 (start meets start, end meets end). A line with
+ * its end before its start overlaps nothing and is left out. Summed over all pairs, the overlap at
+ * `shift` is shift × W - P, where W and P are the weights and weight × position of the ramps that
+ * start before it; one pass over the shifts in order adds them up. Every number here is a whole number
+ * well inside the range doubles hold exactly, as is every term and partial sum overlap adds, so both
+ * give the same exact total. overlap leaves out only pairs that don't overlap when both are sorted.
+ *
+ * The table returned is reused by the next call, so it is read before wholeOverlaps runs again.
+ * Calibration (24,812 windows over 284 real plays): every one has whole-millisecond times, sorted,
+ * and a window of 30 lines is measured about 10 times faster this way.
+ */
+function wholeOverlaps(a: Cue[], b: Cue[], range: number): Float64Array | undefined {
+  if (!Number.isSafeInteger(range) || range < 0) return undefined;
+  let largest = range;
+  for (const cues of [a, b]) {
+    for (let i = 0; i < cues.length; i++) {
+      const { start, end } = cues[i];
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || (i > 0 && start < cues[i - 1].start)) return undefined;
+      largest = Math.max(largest, Math.abs(start), Math.abs(end));
+    }
+  }
+  // Every sum below stays within ramps × the largest position or shift, well short of 2^53.
+  if (4 * a.length * b.length * (3 * largest + 5) > 2 ** 50) return undefined;
+
+  const count = Math.floor((2 * range) / 5) + 1;
+  if (tables.weights.length < count) tables = { weights: new Float64Array(count), moments: new Float64Array(count) };
+  const weights = tables.weights.fill(0, 0, count);
+  const moments = tables.moments.fill(0, 0, count);
+  const ramp = (at: number, weight: number) => {
+    // The first shift past `at`: a ramp adds nothing at its own start.
+    const m = at < -range ? 0 : Math.floor((at + range) / 5) + 1;
+    if (m >= count) return;
+    weights[m] += weight;
+    moments[m] += weight * at;
+  };
+  for (const x of a) {
+    if (x.end < x.start) continue;
+    for (const y of b) {
+      // A pair that overlaps at no shift from -range to range adds 0 at every one of them. From
+      // here on b's lines start too late to meet x even moved back by range.
+      if (y.start - range >= x.end) break;
+      if (y.end < y.start || y.end + range <= x.start) continue;
+      ramp(x.start - y.end, 1);
+      ramp(x.start - y.start, -1);
+      ramp(x.end - y.end, -1);
+      ramp(x.end - y.start, 1);
+    }
+  }
+  // The totals take the place of the weights they are summed from.
+  const totals = weights;
+  let weight = 0;
+  let moment = 0;
+  for (let m = 0; m < count; m++) {
+    weight += weights[m];
+    moment += moments[m];
+    // + 0 makes -0 into 0, as overlap's sum gives.
+    totals[m] = (-range + 5 * m) * weight - moment + 0;
+  }
+  return totals;
 }
 
 /**
@@ -712,7 +873,11 @@ export function speechCurve(speech: Cue[], captions: Cue[], range = 20000): { ma
   const windowEnd = speech[speech.length - 1].end;
   const matched: number[] = [];
   for (let shift = -range; shift <= range; shift += SPEECH_STEP_MS) {
-    const inside = said.filter((x) => x + shift >= windowStart - ONSET_TOLERANCE_MS && x + shift <= windowEnd + ONSET_TOLERANCE_MS).length;
+    // Only whether 3 line starts land inside the window matters, so the count stops there.
+    let inside = 0;
+    for (let n = 0; n < said.length && inside < 3; n++) {
+      if (said[n] + shift >= windowStart - ONSET_TOLERANCE_MS && said[n] + shift <= windowEnd + ONSET_TOLERANCE_MS) inside++;
+    }
     matched.push(inside < 3 ? 0 : matchedOnsets(heard, said, shift, ONSET_TOLERANCE_MS));
   }
   return { matched, heard: heard.length };
@@ -803,8 +968,11 @@ export function measureWindow(embedded: Cue[], captions: Cue[], range = 20000, c
   const near = captions.filter((c) => c.end >= from && c.start <= to);
   if (near.length < 3) return undefined;
 
+  // Whole milliseconds read every shift up to range from one table; anything else is measured shift by
+  // shift. A peak still rising at the end of its refinement carries on past range, beyond the table.
+  const whole = wholeOverlaps(embedded, near, range);
   const scores: number[] = [];
-  for (let shift = -range; shift <= range; shift += 40) scores.push(overlap(embedded, near, shift));
+  for (let shift = -range; shift <= range; shift += 40) scores.push(whole ? whole[(shift + range) / 5] : overlap(embedded, near, shift));
   // Local peaks, each refined to 5 ms.
   const peaks: Array<{ offset: number; score: number }> = [];
   // The two ends of the range aren't peaks: the fit may still be rising past them, towards a shift
@@ -813,7 +981,7 @@ export function measureWindow(embedded: Cue[], captions: Cue[], range = 20000, c
     if (scores[i] <= 0 || scores[i] < scores[i - 1] || scores[i] < scores[i + 1]) continue;
     let peak = { offset: -range + i * 40, score: scores[i] };
     for (let shift = peak.offset - 40; shift <= peak.offset + 40; shift += 5) {
-      const score = overlap(embedded, near, shift);
+      const score = whole && shift <= range ? whole[(shift + range) / 5] : overlap(embedded, near, shift);
       if (score > peak.score) peak = { offset: shift, score };
     }
     peaks.push({ offset: peak.offset, score: Math.round((peak.score / speech) * 100) / 100 });
@@ -1571,6 +1739,30 @@ export async function feed(proc: ChildProcess, chunk: Uint8Array): Promise<void>
   });
 }
 
+/** Lists in their last stretch (listFinishing): each until its answer is sent. */
+const listsFinishing = new Set<Promise<unknown>>();
+/** The longest a read of the audio stands aside for lists finishing, whatever becomes of them. */
+const LISTS_FIRST_MAX_MS = 4000;
+
+/**
+ * A list in its last stretch: its time is up and what it has is being put in order and sent, until
+ * `sent`. Feeding a stretch of the file to ffmpeg takes most of this thread, chunk by chunk, for
+ * seconds, and a list that waits its turn behind that answers after the caller has stopped waiting:
+ * so a feed under way stands aside until the lists finishing have answered (listsFirst).
+ * Calibration (191 lists over 5 days): 13 took over 10.2 s, the wait after which the caller drops the
+ * answer whole; one of them spent 2.3 s past its time with this thread 80% busy feeding audio.
+ */
+export function listFinishing(sent: Promise<unknown>): void {
+  const done = Promise.race([sent.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, LISTS_FIRST_MAX_MS).unref())]);
+  listsFinishing.add(done);
+  void done.then(() => listsFinishing.delete(done));
+}
+
+/** Resolves once no list is in its last stretch. */
+export async function listsFirst(): Promise<void> {
+  while (listsFinishing.size) await Promise.all([...listsFinishing]);
+}
+
 /**
  * ffmpeg fed a stretch of the file through its standard input (audiowindow.ts), counted as run()
  * counts. Once ffmpeg has what it needs it exits, and the read stops there. A read that fails part
@@ -1593,6 +1785,7 @@ async function runFed(args: string[], window: AudioWindow, timeoutMs: number): P
         try {
           for await (const chunk of window.bytes) {
             if (closed) break;
+            if (listsFinishing.size) await listsFirst();
             await feed(proc, chunk);
           }
         } catch (error) {
@@ -1723,8 +1916,19 @@ function marksIn(bingeGroup: string | undefined, played: string): boolean {
 
 /** For tests: forget every remembered link. */
 export function forgetStreams(): void {
+  sharedLists.clear();
+  streamQuota.clear();
+  firstMisses.clear();
+  languageRefills.clear();
+  missWaiters.clear();
+  askedAhead.clear();
   rememberedStreams.clear();
 }
+
+/** Files asked ahead, nobody watching them yet: their stream lists leave the playing file's its share of AIOStreams' limit (streamList). */
+const askedAhead = new Map<string, number>();
+/** Whether a file's lookup can wait its turn: asked ahead, and no download has asked for it since. */
+const canWait = (filename: string): boolean => askedAhead.has(filename) && !isWatched(filename);
 
 /** Files whose look-up in AIOStreams is held back for now (holdFileLookup): under any of the title's ids, so by the file. */
 const heldLookups = new Map<string, Promise<void>>();
@@ -1737,11 +1941,21 @@ const heldLookups = new Map<string, Promise<void>>();
  */
 export function holdFileLookup(filename: string, until: Promise<unknown>): void {
   const key = filename;
+  forgetOld(askedAhead, (at) => at, PLAYBACK_KEPT_MS);
+  askedAhead.set(filename, Date.now());
   const held: Promise<void> = until.then(() => undefined, () => undefined).finally(() => {
     if (heldLookups.get(key) === held) heldLookups.delete(key);
   });
   heldLookups.set(key, held);
 }
+
+/**
+ * How long the list by the id asked with may take before the title's other id is asked beside it
+ * (streamCandidates). Calibration (a day of plays): files in a list AIOStreams had ready were found
+ * and opened in 0.6 to 2.6 s all told, the list itself answering in under a second (0.85 s); a list
+ * it had to search for afresh took 6.9 s.
+ */
+const ALIAS_HEAD_START_MS = 1000;
 
 /**
  * The streams AIOStreams lists that may be the playing file, likeliest first: its name, the listed
@@ -1758,44 +1972,165 @@ export function holdFileLookup(filename: string, until: Promise<unknown>): void 
  */
 export async function streamCandidates(aiostreamsUrl: string, videoId: string, type: string, filename: string, alias?: string): Promise<StreamCandidate[]> {
   await heldLookups.get(filename);
+  const began = Date.now();
+  try {
+    return await listedCandidates(aiostreamsUrl, videoId, type, filename, alias);
+  } finally {
+    forgetOld(listTimes, (seen) => seen.at, PLAYBACK_KEPT_MS);
+    listTimes.set(filename, { ms: (listTimes.get(filename)?.ms ?? 0) + Date.now() - began, at: Date.now() });
+  }
+}
+
+/** A stream as AIOStreams lists it, as far as the lookup reads it. */
+type Listed = { url?: string; behaviorHints?: { filename?: string; videoSize?: number | string; bingeGroup?: string }; streamData?: unknown };
+/** A stream list's answer: its streams with a file name; none when AIOStreams answered with an error; `refused` when it had been asked too often. */
+type ListAnswer = { streams?: Listed[]; refused?: boolean; shared?: boolean };
+
+/**
+ * What an AIOStreams instance's limiter last said: how many more stream lists it takes before its
+ * window ends, and when that is. AIOStreams counts stream lists by the address asking (ten in fifteen
+ * seconds as it ships), and every lookup here comes from this server's one address: a file looked for
+ * under each install URL and each kind, with the next episode's beside it, runs past that, and a list
+ * refused reads as an empty one. So each answer's own count is kept (its RateLimit headers), and an
+ * ask that would be refused waits for the window instead.
+ */
+const streamQuota = new Map<string, { remaining: number; resetAt: number; limit?: number }>();
+/** Stream lists being asked for, by address and viewer: lookups of one file that run side by side (its sync, its hash, its signs) share one ask. */
+const sharedLists = new Map<string, Promise<ListAnswer>>();
+
+/** The numbers of an answer's RateLimit headers (draft 6: three headers; draft 7: one). */
+function quotaOf(headers: Headers): { remaining: number; resetMs: number; limit?: number } | undefined {
+  const one = headers.get("ratelimit");
+  const remaining = headers.get("ratelimit-remaining") ?? /remaining=(\d+)/.exec(one ?? "")?.[1];
+  const reset = headers.get("ratelimit-reset") ?? /reset=(\d+)/.exec(one ?? "")?.[1];
+  if (remaining === undefined || remaining === null || reset === undefined || reset === null) return undefined;
+  const left = Number(remaining);
+  const seconds = Number(reset);
+  const limit = Number(headers.get("ratelimit-limit") ?? /limit=(\d+)/.exec(one ?? "")?.[1]);
+  return Number.isFinite(left) && Number.isFinite(seconds) ? { remaining: left, resetMs: seconds * 1000, ...(Number.isFinite(limit) && limit > 0 ? { limit } : {}) } : undefined;
+}
+
+/**
+ * One stream list from AIOStreams, asked for the player's address. Shared with an ask for the same
+ * list still under way; held back until the instance's window ends when its limiter has said it
+ * takes no more; and asked once more, after the window, when it is refused all the same.
+ */
+function streamList(address: string, viewer: string | undefined, patient = false): Promise<ListAnswer> {
+  const key = `${address}|${viewer ?? ""}`;
+  const under = sharedLists.get(key);
+  if (under) return under.then((answer) => ({ ...answer, shared: true }));
+  const origin = new URL(address).origin;
+  const answer = (async (): Promise<ListAnswer> => {
+    for (let attempt = 0; ; attempt++) {
+      const quota = streamQuota.get(origin);
+      // A file nobody is watching yet takes none of the second half of a window: those places are
+      // the playing file's, for its other install URLs and for asking again.
+      const kept = patient && quota?.limit ? Math.ceil(quota.limit / 2) : 0;
+      if (quota && quota.remaining <= kept && Date.now() < quota.resetAt) {
+        count("api.aiostreams.waited");
+        await new Promise((resolve) => setTimeout(resolve, Math.min(quota.resetAt - Date.now() + QUOTA_SLACK_MS, STREAM_LOOKUP_TIMEOUT_MS)).unref());
+      }
+      // Counted here as sent, so asks made side by side don't all go on the same last place.
+      const before = streamQuota.get(origin);
+      if (before && Date.now() < before.resetAt) before.remaining--;
+      count("api.aiostreams");
+      if (viewer) count("api.aiostreams.forViewer");
+      const response = await fetch(address, {
+        // An AIOStreams client's name: AIOStreams then adds its record of each stream's file (streamData).
+        headers: { "User-Agent": STREAM_DATA_AGENT, ...(viewer ? { "X-AIOStreams-User-IP": viewer } : {}) },
+        signal: AbortSignal.timeout(STREAM_LOOKUP_TIMEOUT_MS),
+      });
+      const said = quotaOf(response.headers);
+      if (said) streamQuota.set(origin, { remaining: said.remaining, resetAt: Date.now() + said.resetMs, ...(said.limit ? { limit: said.limit } : {}) });
+      const body = response.ok || response.status === 429 ? ((await response.json().catch(() => ({}))) as { streams?: Listed[] }) : {};
+      const streams = (body.streams ?? []).filter((s) => s.url && s.behaviorHints?.filename);
+      // Refused: said so (429), or an answer with nothing playable in it (AIOStreams puts the refusal
+      // in the list, for a player to show) on the ask that used the window's last place.
+      const refused = response.status === 429 || (response.ok && streams.length === 0 && (body.streams ?? []).length > 0 && said !== undefined && said.remaining <= 0);
+      if (refused) {
+        count("api.aiostreams.refused");
+        if (attempt === 0 && said) {
+          streamQuota.set(origin, { remaining: 0, resetAt: Date.now() + said.resetMs, ...(said.limit ? { limit: said.limit } : {}) });
+          continue;
+        }
+        return { refused: true };
+      }
+      return response.ok ? { streams } : {};
+    }
+  })();
+  sharedLists.set(key, answer);
+  void answer.then(() => sharedLists.delete(key), () => sharedLists.delete(key));
+  return answer;
+}
+
+/** Waited past the end of a limiter's window, so the next ask lands inside the new one. */
+const QUOTA_SLACK_MS = 100;
+
+/** How long AIOStreams' lists took to answer for a file, all asks together: the share of a first play's wait that is finding the file, not opening it. */
+const listTimes = new Map<string, { ms: number; at: number }>();
+
+async function listedCandidates(aiostreamsUrl: string, videoId: string, type: string, filename: string, alias?: string): Promise<StreamCandidate[]> {
   // Asked for the player's address, the lookup gets the list the player chose from (viewers.ts).
   const viewer = viewerOf(aiostreamsUrl, videoId);
-  type Listed = { url?: string; behaviorHints?: { filename?: string; videoSize?: number | string; bingeGroup?: string }; streamData?: unknown };
+  /** What each list asked for answered, for the line that says a file is in none of them. */
+  const asks: string[] = [];
   const listOf = async (installUrl: string, id = videoId): Promise<Listed[] | undefined> => {
-    count("api.aiostreams");
-    if (viewer) count("api.aiostreams.forViewer");
-    const response = await fetch(`${installUrl.replace(/\/manifest\.json$/, "")}/stream/${encodeURIComponent(type)}/${encodeURIComponent(id)}.json`, {
-      // An AIOStreams client's name: AIOStreams then adds its record of each stream's file (streamData).
-      headers: { "User-Agent": STREAM_DATA_AGENT, ...(viewer ? { "X-AIOStreams-User-IP": viewer } : {}) },
-      signal: AbortSignal.timeout(STREAM_LOOKUP_TIMEOUT_MS),
+    const began = Date.now();
+    const which = installUrl === aiostreamsUrl ? "its own install URL" : "another install URL";
+    const answer = await streamList(`${installUrl.replace(/\/manifest\.json$/, "")}/stream/${encodeURIComponent(type)}/${encodeURIComponent(id)}.json`, viewer, canWait(filename)).catch((error: unknown) => {
+      asks.push(`${which} by ${id}: no answer`);
+      throw error;
     });
-    if (!response.ok) return undefined;
-    const body = (await response.json()) as { streams?: Listed[] };
-    return (body.streams ?? []).filter((s) => s.url && s.behaviorHints?.filename);
+    asks.push(`${which} by ${id}: ${answer.refused ? "refused, asked too often" : answer.streams ? `${answer.streams.length} streams` : "an error"}${answer.shared ? ", an ask already under way" : ` in ${Date.now() - began} ms`}`);
+    return answer.streams;
   };
-  const first = await listOf(aiostreamsUrl);
-  if (!first) return [];
-  let listed = first;
   const size = fileSize(filename);
   const wantedSize = size === undefined ? undefined : Number(size);
-  const off = (s: (typeof listed)[number]) => (wantedSize !== undefined && Number(s.behaviorHints!.videoSize) > 0 ? Math.abs(Number(s.behaviorHints!.videoSize) - wantedSize) : Infinity);
-  const byNearest = (a: (typeof listed)[number], b: (typeof listed)[number]) => off(a) - off(b);
   const wanted = bareName(fileName(filename));
   const loose = releaseName(fileName(filename));
+  const fromAlias = new Set<string>();
+  // The list by the id asked with. AIOStreams answers at once with a list it has ready (the one the
+  // player chose from) and searches afresh for one it hasn't, which takes seconds: when this list
+  // hasn't come after ALIAS_HEAD_START_MS, the title's other id is asked beside it, and the file is
+  // taken from that list if it comes first and names it.
+  const asked = Date.now();
+  const own = listOf(aiostreamsUrl);
+  own.catch(() => undefined);
+  let beside: Promise<Listed[] | undefined> | undefined;
+  let listed: Listed[] | undefined;
+  if (alias) {
+    const slow = await Promise.race([own.then(() => false, () => false), new Promise<boolean>((resolve) => setTimeout(() => resolve(true), ALIAS_HEAD_START_MS).unref())]);
+    if (slow) {
+      beside = listOf(aiostreamsUrl, alias).catch(() => undefined);
+      const early = await Promise.race([own.then(() => undefined, () => undefined), beside]);
+      if (early?.some((s) => bareName(s.behaviorHints!.filename!) === wanted)) {
+        listed = early;
+        for (const s of early) fromAlias.add(s.url!);
+        count("sync.aliasListFirst");
+        console.log(`sync: ${filename}: in the list asked for by ${alias}, which came ${Date.now() - asked} ms after ${videoId}'s was asked for and before it`);
+      }
+    }
+  }
+  if (!listed) {
+    const first = await own;
+    if (!first) return [];
+    listed = first;
+  }
+  const off = (s: Listed) => (wantedSize !== undefined && Number(s.behaviorHints!.videoSize) > 0 ? Math.abs(Number(s.behaviorHints!.videoSize) - wantedSize) : Infinity);
+  const byNearest = (a: Listed, b: Listed) => off(a) - off(b);
   // AIOStreams keeps a finished list under the install URL it was asked with, and each player has its
   // own copy of that URL: when this copy's list lacks the file, the configuration's other copies are
   // asked, and the one the player uses answers with the list the player chose from (installUrls.ts).
-  const named = () => listed.some((s) => bareName(s.behaviorHints!.filename!) === wanted);
+  const named = () => listed!.some((s) => bareName(s.behaviorHints!.filename!) === wanted);
   // The same install URL asked by the title's other id, when its list by this one lacks the file.
-  const fromAlias = new Set<string>();
   const byAlias = async (installUrl: string): Promise<boolean> => {
     if (!alias || named()) return false;
-    const more = await listOf(installUrl, alias).catch(() => undefined);
+    const more = installUrl === aiostreamsUrl && beside ? await beside : await listOf(installUrl, alias).catch(() => undefined);
     if (!more) return false;
-    const had = listed.length;
-    const added = more.filter((s) => !listed.some((l) => l.url === s.url));
+    const had = listed!.length;
+    const added = more.filter((s) => !listed!.some((l) => l.url === s.url));
     for (const s of added) fromAlias.add(s.url!);
-    listed = listed.concat(added);
+    listed = listed!.concat(added);
     if (!named()) return false;
     count("sync.aliasList");
     console.log(`sync: ${filename}: not in the list asked for by ${videoId} (${had} streams); it is in the list asked for by ${alias}`);
@@ -1809,8 +2144,8 @@ export async function streamCandidates(aiostreamsUrl: string, videoId: string, t
   for (const other of [...linked, ...saved]) {
     const more = await listOf(other).catch(() => undefined);
     if (!more) continue;
-    const had = listed.length;
-    listed = listed.concat(more.filter((s) => !listed.some((l) => l.url === s.url)));
+    const had = listed!.length;
+    listed = listed!.concat(more.filter((s) => !listed!.some((l) => l.url === s.url)));
     if (!named() && (await byAlias(other))) break;
     if (!named()) continue;
     const ofLinked = linked.includes(other);
@@ -1826,26 +2161,26 @@ export async function streamCandidates(aiostreamsUrl: string, videoId: string, t
     count("api.aiostreams.jellyfin");
     const versions = await jellyfinVersions(aiostreamsUrl, token!, itemId, STREAM_LOOKUP_TIMEOUT_MS, viewer).catch(() => undefined);
     if (!versions) continue;
-    const had = listed.length;
-    const added = versions.filter((v) => !listed.some((l) => l.url === v.url));
+    const had = listed!.length;
+    const added = versions.filter((v) => !listed!.some((l) => l.url === v.url));
     if (alias && !jellyfinItemIds(videoId, type).includes(itemId)) for (const v of added) fromAlias.add(v.url);
-    listed = listed.concat(added.map((v) => ({ url: v.url, behaviorHints: { filename: v.filename, videoSize: v.size } })));
+    listed = listed!.concat(added.map((v) => ({ url: v.url, behaviorHints: { filename: v.filename, videoSize: v.size } })));
     if (!named()) continue;
     count("sync.jellyfinVersions");
     console.log(`sync: ${filename}: in no install URL's list (${had} streams); it is among the ${versions.length} versions AIOStreams' Jellyfin server holds for the title`);
     break;
   }
   const out: StreamCandidate[] = [];
-  const listedNames: ReadonlySet<string> = new Set(listed.map((s) => bareName(s.behaviorHints!.filename!)));
-  const add = (streams: typeof listed, how: StreamCandidate["how"]) => {
+  const listedNames: ReadonlySet<string> = new Set(listed!.map((s) => bareName(s.behaviorHints!.filename!)));
+  const add = (streams: Listed[], how: StreamCandidate["how"]) => {
     for (const s of streams) if (!out.some((c) => c.url === s.url)) out.push({ url: s.url!, how, listed: listedNames, ...(fromAlias.has(s.url!) ? { byAlias: true } : {}) });
   };
-  add(listed.filter((s) => bareName(s.behaviorHints!.filename!) === wanted).sort(byNearest), "name");
-  add(listed.filter((s) => releaseName(s.behaviorHints!.filename!) === loose).sort(byNearest), "loose");
-  if (size !== undefined) add(listed.filter((s) => String(s.behaviorHints!.videoSize ?? "") === size), "size");
+  add(listed!.filter((s) => bareName(s.behaviorHints!.filename!) === wanted).sort(byNearest), "name");
+  add(listed!.filter((s) => releaseName(s.behaviorHints!.filename!) === loose).sort(byNearest), "loose");
+  if (size !== undefined) add(listed!.filter((s) => String(s.behaviorHints!.videoSize ?? "") === size), "size");
   // An opened usenet release, listed by the name of the file inside it (INNER_SHARE): only when it is the one that fits.
   if (out.length === 0 && wantedSize !== undefined) {
-    const inner = listed.filter((s) => namesNothing(s.behaviorHints!.filename!) && innerSized(Number(s.behaviorHints!.videoSize), wantedSize) && marksIn(s.behaviorHints!.bingeGroup, fileName(filename)));
+    const inner = listed!.filter((s) => namesNothing(s.behaviorHints!.filename!) && innerSized(Number(s.behaviorHints!.videoSize), wantedSize) && marksIn(s.behaviorHints!.bingeGroup, fileName(filename)));
     if (inner.length === 1) add(inner, "inner");
   }
   // This list's links are remembered, and one an earlier list gave is used when this one lacks the file.
@@ -1856,19 +2191,19 @@ export async function streamCandidates(aiostreamsUrl: string, videoId: string, t
   rememberedStreams.set(memoryKey, names);
   for (const [name, kept] of names) if (now - kept.at >= REMEMBERED_MS) names.delete(name);
   const earlier = out.some((c) => c.how === "name") ? undefined : names.get(wanted);
-  for (const s of listed) names.set(bareName(s.behaviorHints!.filename!), { url: s.url!, at: now });
+  for (const s of listed!) names.set(bareName(s.behaviorHints!.filename!), { url: s.url!, at: now });
   while (rememberedStreams.size > REMEMBERED_TITLES) rememberedStreams.delete(rememberedStreams.keys().next().value!);
   if (earlier) {
     count("sync.rememberedLink");
     out.unshift({ url: earlier.url, how: "name", remembered: now - earlier.at, listed: listedNames });
-    console.log(`sync: ${filename}: not in AIOStreams' list now (${listed.length} streams); its link from the list ${Math.round((now - earlier.at) / 1000)} s ago is tried`);
+    console.log(`sync: ${filename}: not in AIOStreams' list now (${listed!.length} streams); its link from the list ${Math.round((now - earlier.at) / 1000)} s ago is tried`);
   }
   // Why a file isn't found is otherwise guessed at afterwards: what AIOStreams listed is said here.
-  if (out.length === 0) console.log(`sync: ${filename}: AIOStreams lists ${listed.length} streams for ${videoId}, none under this name${size === undefined ? "" : " or at this size"}`);
+  if (out.length === 0) console.log(`sync: ${filename}: AIOStreams lists ${listed!.length} streams for ${videoId}, none under this name${size === undefined ? "" : " or at this size"} (${asks.join("; ")})`);
   // AIOStreams' record of the playing file, from the one stream that is surely it: its name at the
   // player's size (or its name alone when the player gave none and one stream has it), else its size alone.
-  const sameName = listed.filter((s) => bareName(s.behaviorHints!.filename!) === wanted && (size === undefined || String(s.behaviorHints!.videoSize ?? "") === size));
-  const sameSize = size === undefined ? [] : listed.filter((s) => String(s.behaviorHints!.videoSize ?? "") === size);
+  const sameName = listed!.filter((s) => bareName(s.behaviorHints!.filename!) === wanted && (size === undefined || String(s.behaviorHints!.videoSize ?? "") === size));
+  const sameSize = size === undefined ? [] : listed!.filter((s) => String(s.behaviorHints!.videoSize ?? "") === size);
   const surely = sameName.length === 1 ? sameName[0] : sameName.length === 0 && sameSize.length === 1 ? sameSize[0] : undefined;
   if (surely) noteListedFacts(filename, surely.streamData);
   return out;
@@ -1883,9 +2218,9 @@ const MEASURED_SOURCES: ReadonlySet<string> = new Set(["local", "stremthru"]);
 /** How long a lookup's record of a file is kept for its play. */
 const LISTED_FACTS_MS = 30 * 60 * 1000;
 
-/** The playing file's tracks as AIOStreams' record gives them: full text subtitle languages, audio languages, length. */
+/** The playing file's tracks as AIOStreams' record gives them: the languages of its full subtitles, audio languages, length. */
 export interface ListedFacts {
-  textLangs: string[];
+  ownLangs: string[];
   audioLangs: string[];
   duration?: number;
 }
@@ -1893,7 +2228,7 @@ export interface ListedFacts {
 /**
  * What AIOStreams' record of a stream (its `streamData`) says about the file, when the record was
  * measured from the file (MEASURED_SOURCES); undefined otherwise. Subtitle languages count as
- * fullTextLanguages counts them: text tracks, not signs, songs or forced ones. Languages come as
+ * fullSubtitleLanguages counts them: text and picture tracks, not signs, songs or forced ones. Languages come as
  * names ("English") and are given as codes; a name not known here is left out of the subtitle
  * languages (so less is skipped) and counts as unknown among the audio ones.
  */
@@ -1904,11 +2239,11 @@ export function factsOfListed(streamData: unknown): ListedFacts | undefined {
   if (!parsed || typeof parsed.mediaInfoSource !== "string" || !MEASURED_SOURCES.has(parsed.mediaInfoSource)) return undefined;
   const tracks = (value: unknown): Track[] => (Array.isArray(value) ? value.filter((t): t is Track => typeof t === "object" && t !== null) : []);
   const code = (lang: unknown) => (typeof lang === "string" ? languageCode(lang) : undefined);
-  const full = (t: Track) => typeof t.codec === "string" && TEXT_CODECS.test(t.codec.toLowerCase()) && t.forced !== true && !/sign|song|forced/i.test(typeof t.title === "string" ? t.title : "");
-  const textLangs = [...new Set(tracks(parsed.subtitleTracks).filter(full).map((t) => code(t.lang)).filter((c): c is string => Boolean(c)))];
+  const full = (t: Track) => typeof t.codec === "string" && (TEXT_CODECS.test(t.codec.toLowerCase()) || IMAGE_CODECS.test(t.codec.toLowerCase())) && t.forced !== true && !/sign|song|forced/i.test(typeof t.title === "string" ? t.title : "");
+  const ownLangs = [...new Set(tracks(parsed.subtitleTracks).filter(full).map((t) => code(t.lang)).filter((c): c is string => Boolean(c)))];
   const audioLangs = tracks(parsed.audioTracks).map((t) => code(t.lang) ?? "und");
   const duration = typeof data!.duration === "number" && data!.duration > 0 ? data!.duration : undefined;
-  return { textLangs, audioLangs, ...(duration ? { duration } : {}) };
+  return { ownLangs, audioLangs, ...(duration ? { duration } : {}) };
 }
 
 /**
@@ -2143,7 +2478,7 @@ interface Probe {
   audio?: number;
   /** Its language as tagged, when it is. */
   audioLang?: string;
-  /** Languages of the file's full text subtitle tracks (see fullTextLanguages). */
+  /** Languages of the file's full subtitle tracks (see fullSubtitleLanguages). */
   languages: string[];
   /** Bits per second over the whole file, when the header says. */
   bitrate?: number;
@@ -2155,13 +2490,13 @@ const IMAGE_CODECS = /^(hdmv_pgs_subtitle|dvd_subtitle)$/;
 type ProbedStream = { index: number; codec_type?: string; codec_name?: string; tags?: { language?: string; title?: string }; disposition?: { forced?: number } };
 
 /**
- * Languages the file already has full subtitles in: text tracks, not signs, songs or forced lines,
- * as tagged ("ara", "eng"). Picture tracks (PGS) don't count: many players have to burn them in.
+ * Languages the file already has full subtitles in, as tagged ("ara", "eng"): text tracks and
+ * picture ones (PGS, VobSub) alike, not signs, songs or forced lines.
  */
-export function fullTextLanguages(streams: ProbedStream[]): string[] {
+export function fullSubtitleLanguages(streams: ProbedStream[]): string[] {
   const signs = (s: ProbedStream) => /sign|song|forced/i.test(s.tags?.title ?? "") || Boolean(s.disposition?.forced);
   const tags = streams
-    .filter((s) => s.codec_type === "subtitle" && TEXT_CODECS.test(s.codec_name ?? "") && !signs(s))
+    .filter((s) => s.codec_type === "subtitle" && (TEXT_CODECS.test(s.codec_name ?? "") || IMAGE_CODECS.test(s.codec_name ?? "")) && !signs(s))
     .map((s) => (s.tags?.language ?? "").toLowerCase())
     .filter((l) => l && l !== "und");
   return [...new Set(tags)];
@@ -2344,7 +2679,7 @@ async function probe(url: string, listed?: number): Promise<Probe> {
     ...(Object.keys(trackLangs).length ? { trackLangs } : {}),
     audio,
     ...(audioLang ? { audioLang } : {}),
-    languages: fullTextLanguages(json.streams ?? [])
+    languages: fullSubtitleLanguages(json.streams ?? [])
   };
 }
 
@@ -2573,8 +2908,10 @@ export interface FileAnchors {
   speechChecked?: boolean;
   /** How the windows' speech was heard: "silero" (src/vad.ts). Older speech, from loudness alone, isn't used. */
   speechBy?: "silero";
-  /** Languages the file already has full text subtitles in (see fullTextLanguages); unknown on older records. */
+  /** Languages the file already has full subtitles in (see fullSubtitleLanguages); unknown on older records. */
   subtitleLangs?: string[];
+  /** Set where subtitleLangs counts picture tracks too: a record without it knows the text ones only. */
+  pictureLangs?: true;
 }
 
 /**
@@ -2666,6 +3003,31 @@ async function animeEpisodeId(videoId: string): Promise<string | undefined> {
  * answer and without it in the next, one episode apart; the anime's own number needs no count. So a
  * file its own list lacks is asked for by that id too, once, at each place before the next.
  */
+/** Files whose lookup under way found them in none of AIOStreams' lists the first time it asked, and when: it asks again after a wait (LOOKUP_RETRY_MS). */
+const firstMisses = new Map<string, number>();
+
+/**
+ * Whether the playing file was in none of AIOStreams' lists when they were first asked for it. A list
+ * given more time for a file that is slow to open (FILE_WAIT_MS) doesn't spend it on one that isn't
+ * found: asking again takes 5 s and then 15 s, and such a file is rarely found then.
+ */
+export function lookupMissed(filename: string): boolean {
+  return firstMisses.has(filename);
+}
+
+/** Who waits to hear that a file's first lookup missed, by filename. */
+const missWaiters = new Map<string, Set<() => void>>();
+
+/** Settles once the file's first lookup has missed (lookupMissed); never where it is found. */
+function whenLookupMissed(filename: string): Promise<void> {
+  if (firstMisses.has(filename)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const waiting = missWaiters.get(filename) ?? new Set();
+    waiting.add(resolve);
+    missWaiters.set(filename, waiting);
+  });
+}
+
 export async function lookUpStreamAgain(aiostreamsUrl: string, videoId: string, type: string, filename: string, waits: number[] = LOOKUP_RETRY_MS): Promise<string | undefined> {
   for (let attempt = 0; ; attempt++) {
     // The anime lists' id for the episode, asked for where a list by the episode's own id lacks the file.
@@ -2678,6 +3040,8 @@ export async function lookUpStreamAgain(aiostreamsUrl: string, videoId: string, 
         count("sync.unlistedRecovered");
         console.log(`sync: ${filename}: read through its link from the earlier list`);
       }
+      firstMisses.delete(filename);
+      missWaiters.delete(filename);
       if (attempt > 0) {
         count("sync.lookupRetryFound");
         console.log(`sync: ${filename}: not in AIOStreams' list at first, found on asking again`);
@@ -2685,6 +3049,12 @@ export async function lookUpStreamAgain(aiostreamsUrl: string, videoId: string, 
       return url;
     }
     if (attempt >= waits.length) return undefined;
+    if (attempt === 0) {
+      forgetOld(firstMisses, (at) => at, UNLISTED_MS);
+      firstMisses.set(filename, Date.now());
+      for (const wake of missWaiters.get(filename) ?? []) wake();
+      missWaiters.delete(filename);
+    }
     await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
     count("sync.lookupRetry");
   }
@@ -2826,6 +3196,8 @@ async function resolvePlayback(aiostreamsUrl: string, videoId: string, type: str
   const url = await lookup;
   if (!url) {
     if (background) throw new Error(`no stream in AIOStreams named ${filename} (asked once, for the audio)`);
+    // Every read that waited on the same lookup ends here: the first says it, the rest have it said.
+    if (notListed(filename)) throw new AlreadySaid(`no stream in AIOStreams named ${filename} (seen a moment ago)`);
     forgetOld(unlisted, (at) => at, UNLISTED_MS);
     unlisted.set(filename, Date.now());
     count("sync.unlisted");
@@ -2876,9 +3248,12 @@ const headerLanguageJobs = new Map<string, Promise<string[] | undefined>>();
 /** The languages of a Matroska file's audio tracks, from the same read (see hasEnglishVoices). */
 const headerAudioJobs = new Map<string, Promise<string[] | undefined>>();
 
-/** Full text subtitle languages among a Matroska file's tracks: not signs, songs or forced lines, as tagged. */
-export function mkvTextLanguages(tracks: MkvTrack[]): string[] {
-  const full = tracks.filter((t) => t.type === "subtitle" && isTextCodec(t.codec) && !t.forced && !/sign|song|forced/i.test(t.name));
+/** Matroska's codec ids for picture subtitles (Blu-ray PGS, DVD VobSub). */
+const MKV_PICTURE_CODECS = new Set(["S_HDMV/PGS", "S_VOBSUB"]);
+
+/** The languages of a Matroska file's full subtitle tracks, text and picture: not signs, songs or forced lines, as tagged. */
+export function mkvSubtitleLanguages(tracks: MkvTrack[]): string[] {
+  const full = tracks.filter((t) => t.type === "subtitle" && (isTextCodec(t.codec) || MKV_PICTURE_CODECS.has(t.codec)) && !t.forced && !/sign|song|forced/i.test(t.name));
   return [...new Set(full.map((t) => t.language.toLowerCase()).filter((l) => l && l !== "und"))];
 }
 
@@ -2905,15 +3280,16 @@ function probeFile(aiostreamsUrl: string, videoId: string, type: string, filenam
       const url = await opening;
       const opened = Date.now() - started;
       if (!headerLanguageJobs.has(filename)) {
-        headerLanguageJobs.set(filename, head.then((h) => (h ? mkvTextLanguages(h.tracks) : undefined)));
+        headerLanguageJobs.set(filename, head.then((h) => (h ? mkvSubtitleLanguages(h.tracks) : undefined)));
         setTimeout(() => headerLanguageJobs.delete(filename), 30 * 60 * 1000).unref();
       }
       const probed = await probe(url, Number(fileSize(filename)) || undefined);
       // Where a first play's wait goes: finding and opening the stream (a debrid addon can take seconds
       // to make a link the first time), then reading its header.
-      console.log(`sync: ${filename}: stream found and opened in ${opened} ms, header read in ${Date.now() - started - opened} ms`);
+      const listsMs = listTimes.get(filename)?.ms;
+      console.log(`sync: ${filename}: stream found and opened in ${opened} ms${listsMs === undefined ? "" : ` (${Math.min(listsMs, opened)} ms of it AIOStreams' lists, the rest opening its link)`}, header read in ${Date.now() - started - opened} ms`);
       if ((probed.track === undefined && (probed.audio === undefined || !SPEECH_SYNC)) || !probed.duration) {
-        const none: FileAnchors = { filename, duration: probed.duration, windows: [], speechChecked: true, subtitleLangs: probed.languages };
+        const none: FileAnchors = { filename, duration: probed.duration, windows: [], speechChecked: true, subtitleLangs: probed.languages, pictureLangs: true };
         await mkdir(cachePath("anchors"), { recursive: true });
         await writeFile(anchorsFile(filename), JSON.stringify(none));
         count("sync.noSubtitles");
@@ -2939,13 +3315,16 @@ function probeFile(aiostreamsUrl: string, videoId: string, type: string, filenam
  * earlier results when there are any, else from its header, waited on for at
  * most waitMs. Undefined when that isn't known in time.
  */
-export async function fileHasSubtitles(aiostreamsUrl: string, videoId: string, type: string, filename: string, waitMs: number): Promise<boolean | "speech" | undefined> {
+export async function fileHasSubtitles(aiostreamsUrl: string, videoId: string, type: string, filename: string, waitMs: number, missedWaitMs = waitMs): Promise<boolean | "speech" | undefined> {
   try {
     if (notListed(filename)) return false;
     const found = JSON.parse(await readFile(anchorsFile(filename), "utf8")) as FileAnchors;
     if (stillValid(found)) return found.windows.length === 0 ? false : found.speechOnly ? "speech" : true;
   } catch {}
-  const probed = await Promise.race([probeFile(aiostreamsUrl, videoId, type, filename), new Promise<"late">((resolve) => setTimeout(() => resolve("late"), waitMs).unref())]);
+  const asked = Date.now();
+  const late = (ms: number) => new Promise<"late">((resolve) => setTimeout(() => resolve("late"), Math.max(0, asked + ms - Date.now())).unref());
+  // A file in none of AIOStreams' lists is waited for `missedWaitMs` only, from the moment that is known.
+  const probed = await Promise.race([probeFile(aiostreamsUrl, videoId, type, filename), late(waitMs), whenLookupMissed(filename).then(() => late(missedWaitMs))]);
   if (notListed(filename)) return false;
   if (probed === "late" || !probed) return undefined;
   if (!probed.duration) return false;
@@ -3004,14 +3383,23 @@ export function startFileHash(aiostreamsUrl: string, videoId: string, type: stri
 }
 
 /**
- * Languages the playing file already has full text subtitles in, from earlier reads of it, a header
+ * Languages the playing file already has full subtitles in, from earlier reads of it, a header
  * read that has finished (fileHasSubtitles starts one on a first play), or the quick read of a
  * Matroska file's first part, waited on for at most waitMs. Undefined when not known in time.
+ * A reading kept without its picture tracks' languages is filled in by one read of the file's first
+ * part (completeLanguages), waited on for at most LANGUAGE_REFILL_WAIT_MS of waitMs, else from
+ * AIOStreams' record of the file, where a lookup found one.
  */
 export async function embeddedLanguages(filename: string, waitMs = 0): Promise<string[] | undefined> {
   try {
     const found = JSON.parse(await readFile(anchorsFile(filename), "utf8")) as FileAnchors;
-    if (Array.isArray(found.subtitleLangs)) return found.subtitleLangs;
+    if (Array.isArray(found.subtitleLangs)) {
+      if (found.pictureLangs) return found.subtitleLangs;
+      const refill = languageRefills.get(filename);
+      const wait = Math.min(waitMs, LANGUAGE_REFILL_WAIT_MS);
+      const read = refill ? await Promise.race([refill, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), wait).unref())]) : undefined;
+      return read ?? [...new Set([...found.subtitleLangs, ...(listedFactsOf(filename)?.ownLangs ?? [])])];
+    }
   } catch {}
   const job = probeJobs.get(filename);
   // A header read that's already done.
@@ -3020,7 +3408,36 @@ export async function embeddedLanguages(filename: string, waitMs = 0): Promise<s
   const quick = headerLanguageJobs.get(filename);
   const read = quick ? await Promise.race([quick, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), waitMs).unref())]) : undefined;
   // Not read in time: AIOStreams' record of the file, where a lookup found one (listedFacts).
-  return read ?? listedFactsOf(filename)?.textLangs;
+  return read ?? listedFactsOf(filename)?.ownLangs;
+}
+
+/** The most of a list's wait given to completing a kept reading's languages (completeLanguages). */
+const LANGUAGE_REFILL_WAIT_MS = 3000;
+const languageRefills = new Map<string, Promise<string[] | undefined>>();
+
+/**
+ * Completes a kept reading whose languages are its text tracks' only (no `pictureLangs`): the
+ * file's first part is read once, its picture tracks' languages added, and the reading marked, so
+ * "Skip languages the file already has" knows them from then on. Asked for by a list, which waits
+ * a little for it (embeddedLanguages); AIOStreams is asked once, as for any read nobody waits on.
+ * A file that isn't Matroska, or can't be read now, is left as it is and tried again later.
+ */
+export function completeLanguages(aiostreamsUrl: string, videoId: string, type: string, filename: string): void {
+  if (languageRefills.has(filename)) return;
+  const job = (async () => {
+    const kept = async () => JSON.parse(await readFile(anchorsFile(filename), "utf8")) as FileAnchors;
+    const found = await kept();
+    if (!Array.isArray(found.subtitleLangs) || found.pictureLangs) return undefined;
+    const head = await readMkvTracks(await resolvePlayback(aiostreamsUrl, videoId, type, filename, true));
+    if (!head) return undefined;
+    const now = await kept();
+    const subtitleLangs = [...new Set([...(now.subtitleLangs ?? []), ...mkvSubtitleLanguages(head.tracks)])];
+    await writeFile(anchorsFile(filename), JSON.stringify({ ...now, subtitleLangs, pictureLangs: true } satisfies FileAnchors));
+    count("sync.languagesCompleted");
+    return subtitleLangs;
+  })().catch(() => undefined);
+  languageRefills.set(filename, job);
+  setTimeout(() => languageRefills.delete(filename), 30 * 60 * 1000).unref();
 }
 
 const subtitleTrackJobs = new Map<string, Promise<MkvTrack[]>>();
@@ -3149,7 +3566,7 @@ async function indexAnchors(url: string, filename: string, duration: number, aud
   console.log(`sync: ${filename}: timing from the file's index (${Math.round(timing.bytesRead / 1024)} KB, ${lines.get(first)?.length ?? 0} lines on track ${first})`);
   return {
     filename, duration: length, windows, track: first, audio, ...(audioLang ? { audioLang } : {}), source: "index", rounds: MAX_ROUNDS, ...(bitrate ? { bitrate } : {}), ...(firstIsPicture ? { image: true } : {}),
-    ...(rest.length ? { others: rest } : {}), ...(langTracks.length ? { langTracks } : {}), ...(Object.keys(trackLangs).length ? { trackLangs } : {}), subtitleLangs: languages
+    ...(rest.length ? { others: rest } : {}), ...(langTracks.length ? { langTracks } : {}), ...(Object.keys(trackLangs).length ? { trackLangs } : {}), subtitleLangs: languages, pictureLangs: true
   };
 }
 
@@ -3309,6 +3726,143 @@ async function keptVoiceSpots(filename: string): Promise<VoiceSpot[] | undefined
   }
 }
 
+/**
+ * A subtitle's lines as served, kept beside a file's readings for other subtitles to be timed by in
+ * place of the file's own subtitle track (linesView). Two kinds, the first of each a file gets:
+ *
+ * - "voiced": a subtitle the voices show to be on them, on a file whose own track they show to be
+ *   off them. That track would time every other subtitle off the voices too, so translations for
+ *   the file are timed by these lines from the start.
+ * - "fitting": a translation the file's own track timed over most of its windows. A subtitle that
+ *   fits nothing in that track (fewer lines, split another way) is timed by these lines before
+ *   speech gets its turn: subtitles of one title share their line starts more than they share a
+ *   track's.
+ */
+interface KeptLines {
+  /** The cached subtitle these are the lines of. */
+  source: string;
+  lines: Cue[];
+}
+type LinesKind = "voiced" | "fitting";
+
+function linesFile(filename: string, kind: LinesKind): string {
+  return anchorsFile(filename).replace(/\.json$/, `.${kind}`);
+}
+
+/** Which subtitle a file's kept lines are (null: it has none), by where they are kept: asked for by every sync. */
+const linesSources = new Map<string, string | null>();
+
+async function keptLines(filename: string, kind: LinesKind): Promise<KeptLines | undefined> {
+  const file = linesFile(filename, kind);
+  if (linesSources.get(file) === null) return undefined;
+  try {
+    const kept = JSON.parse(await readFile(file, "utf8")) as KeptLines;
+    if (typeof kept.source === "string" && Array.isArray(kept.lines) && kept.lines.length) {
+      linesSources.set(file, kept.source);
+      return kept;
+    }
+  } catch {}
+  if (linesSources.size > 5000) linesSources.clear();
+  linesSources.set(file, null);
+  return undefined;
+}
+
+async function keepLines(filename: string, kind: LinesKind, source: string, lines: Cue[]): Promise<void> {
+  if (standInFor(filename) || (await keptLines(filename, kind))) return;
+  await writeWhole(linesFile(filename, kind), JSON.stringify({ source, lines: lines.map((c) => ({ start: c.start, end: c.end })) } satisfies KeptLines));
+  linesSources.set(linesFile(filename, kind), source);
+  if (kind === "voiced") console.log(`sync: ${filename}: its own subtitle track is off its voices and this subtitle is on them: other subtitles for it are timed by these lines`);
+}
+
+/** Which subtitle a file's kept lines of this kind are, when it has them. */
+async function linesSource(filename: string, kind: LinesKind): Promise<string | undefined> {
+  const file = linesFile(filename, kind);
+  return (linesSources.has(file) ? linesSources.get(file) : (await keptLines(filename, kind))?.source) ?? undefined;
+}
+
+/**
+ * Whether a finished sync was made before the file had lines kept that would time it otherwise: by a
+ * track since shown to be off the voices (voiced), or fitting nothing in the track before a subtitle
+ * that fits it was kept (fitting). It is then made again.
+ */
+async function linesKeptSince(done: SyncResult, filename: string): Promise<boolean> {
+  if (done.speechOnly || done.outruns) return false;
+  if (!done.voiced && !done.asCame && !done.overTrack) {
+    const source = await linesSource(filename, "voiced");
+    if (source !== undefined && source !== done.source) return true;
+  }
+  if (done.anchors.length === 0 && !done.fittingTried) {
+    const source = await linesSource(filename, "fitting");
+    if (source !== undefined && source !== done.source) return true;
+  }
+  return false;
+}
+
+/** The file's windows with a kept subtitle's lines in place of its own track's (see KeptLines). */
+export function linesView(found: FileAnchors, lines: Cue[]): FileAnchors {
+  const sorted = [...lines].sort((a, b) => a.start - b.start);
+  return {
+    ...found,
+    image: false,
+    others: undefined,
+    langTracks: undefined,
+    windows: found.windows.map((w) => (w.heard ? w : { from: w.from, to: w.to, ...(w.bridge ? { bridge: true } : {}), ...(w.speech ? { speech: w.speech } : {}), cues: sorted.filter((c) => c.start >= w.from && c.start < w.to) }))
+  };
+}
+
+/** The least share of a file's windows with lines a translation's timing must hold for its lines to be kept as fitting. */
+const FITTING_MIN_WINDOWS = 0.6;
+
+/** A timing by kept lines is judged in this many parts of the subtitle's length; a part with fewer lines than these isn't. */
+const KEPT_PARTS = 8;
+const KEPT_PART_LINES = 30;
+/** A line start this near one of the kept lines' has met it. */
+const KEPT_MEET_MS = 250;
+
+/**
+ * Where a timing by kept lines doesn't hold: the first part of the subtitle (of KEPT_PARTS, by time)
+ * whose line starts, as timed, meet the kept lines' starts no more often than chance allows, or
+ * undefined when every part holds. The window fits look a fixed span either way, so a subtitle of
+ * another cut whose shift climbs out of that span keeps the last shift found, with its lines after
+ * that falling on the kept lines at random: such a timing is right for part of the file only.
+ *
+ * Chance: the share of a part's time within KEPT_MEET_MS of a kept line's start. A part holds when
+ * it meets more than chance by two standard deviations of that count.
+ *
+ * Calibration (three plays, 8 subtitles timed by kept lines, 63 parts judged): the parts timed right
+ * met 29% to 83% of their lines where chance gave 9% to 19%; the one part past a shift out of the
+ * span met 10% where chance gave 12%.
+ */
+export function keptLinesMissed(starts: number[], kept: number[]): { from: number; to: number; met: number; lines: number; chance: number } | undefined {
+  const timed = [...starts].sort((a, b) => a - b);
+  const lines = [...kept].sort((a, b) => a - b);
+  if (timed.length === 0 || lines.length === 0) return undefined;
+  const first = timed[0];
+  const span = (timed[timed.length - 1] - first) / KEPT_PARTS;
+  if (span <= 0) return undefined;
+  const nearest = (t: number) => {
+    let lo = 0;
+    let hi = lines.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (lines[mid] < t) lo = mid + 1;
+      else hi = mid;
+    }
+    return Math.min(lo < lines.length ? lines[lo] - t : Infinity, lo > 0 ? t - lines[lo - 1] : Infinity);
+  };
+  for (let part = 0; part < KEPT_PARTS; part++) {
+    const from = first + part * span;
+    const to = part === KEPT_PARTS - 1 ? Infinity : from + span;
+    const here = timed.filter((t) => t >= from && t < to);
+    if (here.length < KEPT_PART_LINES) continue;
+    const inPart = lines.filter((t) => t >= from - KEPT_MEET_MS && t < from + span + KEPT_MEET_MS).length;
+    const chance = Math.min(1, (inPart * 2 * KEPT_MEET_MS) / span);
+    const met = here.filter((t) => nearest(t) <= KEPT_MEET_MS).length;
+    if (met <= here.length * chance + 2 * Math.sqrt(here.length * chance * (1 - chance))) return { from, to: from + span, met, lines: here.length, chance };
+  }
+  return undefined;
+}
+
 /** Track checks whose audio is being heard, by file, and the files one was started for since the server started. */
 const voiceSpotJobs = new Map<string, Promise<void>>();
 const voiceSpotsTried = new Set<string>();
@@ -3320,7 +3874,10 @@ const voiceSpotsTried = new Set<string>();
  * (syncedByVoices), and one that lands later decides the next request. Its cost is the file's bit rate
  * over the stretches heard, at most TRACK_CHECK.maxBytes, counted against DAILY_READ_GB.
  */
-function hearVoiceSpots(stored: FileAnchors, froms: number[], aiostreamsUrl: string, videoId: string, type: string, filename: string): void {
+function hearVoiceSpots(stored: FileAnchors, froms: number[], aiostreamsUrl: string, videoId: string, type: string, asked: string): void {
+  // By the release the link serves (readingsRef): a file asked for under the name of a release its link
+  // no longer serves is heard once, not once under each name.
+  const filename = readingsRef(asked);
   if (voiceSpotJobs.has(filename)) return;
   voiceSpotsTried.add(filename);
   const job = (async () => {
@@ -3354,7 +3911,7 @@ export async function syncedByVoices(
   filename: string,
   lang: string | undefined,
   waitMs: number,
-  hearing: Promise<unknown> | undefined = extendJobs.get(`${filename}#speech`) ?? voiceSpotJobs.get(filename)
+  hearing: Promise<unknown> | undefined = extendJobs.get(`${filename}#speech`) ?? voiceSpotJobs.get(readingsRef(filename))
 ): Promise<SyncResult | undefined> {
   if (!hearing || waitMs <= 0) return undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -3519,7 +4076,7 @@ export function fileAnchors(aiostreamsUrl: string, videoId: string, type: string
       if (!probed) throw new AlreadySaid("file header not read");
       const { duration, track, image, audio, audioLang, languages, others, trackLangs, bitrate } = probed;
       const span = windowMs(bitrate);
-      if ((track === undefined && (audio === undefined || !SPEECH_SYNC)) || !duration) return { filename, duration, windows: [], speechChecked: true, subtitleLangs: languages } satisfies FileAnchors;
+      if ((track === undefined && (audio === undefined || !SPEECH_SYNC)) || !duration) return { filename, duration, windows: [], speechChecked: true, subtitleLangs: languages, pictureLangs: true } satisfies FileAnchors;
       // No subtitle track: speech in the audio stands in for the lines.
       const speechOnly = track === undefined;
       const url = await resolvePlayback(aiostreamsUrl, videoId, type, filename);
@@ -3559,7 +4116,7 @@ export function fileAnchors(aiostreamsUrl: string, videoId: string, type: string
         console.log(`sync: ${filename}: no subtitle track, timing from speech in the audio`);
       }
       // A file with no subtitle track keeps its bit rate: hearing more of its audio later costs that (see moreSpeechCost).
-      const result: FileAnchors = { filename, duration, windows, track, image, audio, ...(audioLang ? { audioLang } : {}), ...(others?.length && !speechOnly ? { others } : {}), ...(trackLangs && !speechOnly ? { trackLangs } : {}), ...(speechOnly ? { speechOnly, ...(bitrate ? { bitrate } : {}) } : {}), ...(audio !== undefined ? { speechBy: "silero" as const } : {}), subtitleLangs: languages };
+      const result: FileAnchors = { filename, duration, windows, track, image, audio, ...(audioLang ? { audioLang } : {}), ...(others?.length && !speechOnly ? { others } : {}), ...(trackLangs && !speechOnly ? { trackLangs } : {}), ...(speechOnly ? { speechOnly, ...(bitrate ? { bitrate } : {}) } : {}), ...(audio !== undefined ? { speechBy: "silero" as const } : {}), subtitleLangs: languages, pictureLangs: true };
       await mkdir(cachePath("anchors"), { recursive: true });
       await writeFile(anchorsFile(filename), JSON.stringify(result));
       return result;
@@ -3884,6 +4441,180 @@ export function farTiming(found: FileAnchors, captions: Cue[], stretchesOnly = f
 }
 
 /**
+ * A timing in stretches found by how the lines overlap, for captions whose lines start elsewhere
+ * than the file's (a loose translation, lines joined and split otherwise) and sit further off than
+ * the windows' own search reaches: another cut's, later after each break. For a file read whole from
+ * its index.
+ *
+ * - Each window's cover is measured at every shift from FAR_FROM_MS earlier to WIDE_RANGE_MS later:
+ *   the share of the time the file's lines and the captions (moved) fill between them that both fill.
+ * - The run of shifts over the windows with the most cover in all is the timing: a shift may creep
+ *   COVER_CREEP_STEPS a window for nothing, and any other change costs COVER_CHANGE of a window's
+ *   full cover.
+ * - Dense dialogue covers itself at some shift whatever it says, so the run is held against the same
+ *   search with the captions' order mirrored in time: as many lines, as long, as close together, and
+ *   nothing of the file's order. The real run must cover COVER_MIN_GAIN more of the file than that.
+ *
+ * The caller holds the result to its own tests.
+ */
+export function coverStretches(found: FileAnchors, captions: Cue[]): { anchors: Anchor[]; cover: number; decoy: number } | undefined {
+  return finish(coverStretchesSteps(found, captions));
+}
+
+/** coverStretches, a window per step. */
+function* coverStretchesSteps(found: FileAnchors, captions: Cue[]): Steps<{ anchors: Anchor[]; cover: number; decoy: number } | undefined> {
+  if (found.speechOnly || found.source !== "index" || captions.length === 0) return undefined;
+  const windows = found.windows.filter((w) => !w.bridge && !w.heard && w.cues.length >= 3).sort((a, b) => a.from - b.from);
+  if (windows.length < STRETCH_MIN_WINDOWS) return undefined;
+  // No shift far and earlier, as with farStretches: a file that has more than the captions is timed
+  // this way (each break moves them later), never captions that have more than the file.
+  const steps = Math.round((FAR_FROM_MS + WIDE_RANGE_MS) / COVER_STEP_MS) + 1;
+  const offsetAt = (k: number) => -FAR_FROM_MS + k * COVER_STEP_MS;
+  /** One window's cover at a shift: what both fill, over what either fills. `sorted` by start; `longest` its longest line. */
+  const coverAt = (w: (typeof windows)[number], fills: number, sorted: Cue[], longest: number, shift: number): number => {
+    // The first caption that can reach into the window once moved.
+    let lo = 0;
+    let hi = sorted.length;
+    const reach = w.from - shift - longest;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (sorted[mid].start < reach) lo = mid + 1;
+      else hi = mid;
+    }
+    let both = 0;
+    let theirs = 0;
+    for (let i = lo; i < sorted.length; i++) {
+      const from = sorted[i].start + shift;
+      if (from >= w.to) break;
+      const to = sorted[i].end + shift;
+      if (to <= w.from) continue;
+      theirs += Math.min(to, w.to) - Math.max(from, w.from);
+      for (const line of own.get(w)!) {
+        const shared = Math.min(to, line.end) - Math.max(from, line.start);
+        if (shared > 0) both += shared;
+      }
+    }
+    const either = fills + theirs - both;
+    return either > 0 ? both / either : 0;
+  };
+  /** The moments a set of lines fills, each once: lines that overlap one another (a sign over dialogue) joined. */
+  const filled = (lines: Cue[]): Cue[] => {
+    const out: Cue[] = [];
+    for (const c of [...lines].sort((x, y) => x.start - y.start)) {
+      const last = out[out.length - 1];
+      if (last && c.start <= last.end) last.end = Math.max(last.end, c.end);
+      else if (c.end > c.start) out.push({ start: c.start, end: c.end });
+    }
+    return out;
+  };
+  const own = new Map(windows.map((w) => [w, filled(w.cues.map((c) => ({ start: Math.max(c.start, w.from), end: Math.min(c.end, w.to) })))]));
+  function* curves(lines: Cue[]): Steps<Float32Array[]> {
+    const sorted = filled(lines);
+    const longest = sorted.reduce((most, c) => Math.max(most, c.end - c.start), 0);
+    const out: Float32Array[] = [];
+    for (const w of windows) {
+      yield;
+      const fills = own.get(w)!.reduce((sum, c) => sum + c.end - c.start, 0);
+      const curve = new Float32Array(steps);
+      for (let k = 0; k < steps; k++) curve[k] = coverAt(w, fills, sorted, longest, offsetAt(k));
+      out.push(curve);
+    }
+    return out;
+  }
+  /** The run of shifts (in steps, a window each) with the most cover in all. */
+  const run = (cover: Float32Array[]): number[] => {
+    let best = Float32Array.from(cover[0]);
+    const from: Int32Array[] = [];
+    for (let w = 1; w < cover.length; w++) {
+      let top = 0;
+      for (let k = 1; k < steps; k++) if (best[k] > best[top]) top = k;
+      const next = new Float32Array(steps);
+      const back = new Int32Array(steps);
+      for (let k = 0; k < steps; k++) {
+        let stay = k;
+        for (let j = Math.max(0, k - COVER_CREEP_STEPS); j <= Math.min(steps - 1, k + COVER_CREEP_STEPS); j++) if (best[j] > best[stay]) stay = j;
+        if (best[top] - COVER_CHANGE > best[stay]) stay = top;
+        back[k] = stay;
+        next[k] = (stay === top && Math.abs(top - k) > COVER_CREEP_STEPS ? best[top] - COVER_CHANGE : best[stay]) + cover[w][k];
+      }
+      from.push(back);
+      best = next;
+    }
+    let at = 0;
+    for (let k = 1; k < steps; k++) if (best[k] > best[at]) at = k;
+    const path = new Array<number>(cover.length);
+    for (let w = cover.length - 1; w >= 0; w--) {
+      path[w] = at;
+      if (w > 0) at = from[w - 1][at];
+    }
+    return path;
+  };
+  const along = (cover: Float32Array[], path: number[]) => path.reduce((sum, k, w) => sum + cover[w][k], 0) / path.length;
+  const real = yield* curves(captions);
+  const path = run(real);
+  const cover = along(real, path);
+  // The decoy: every line as far from the end as it was from the start.
+  const first = captions.reduce((least, c) => Math.min(least, c.start), Infinity);
+  const last = captions.reduce((most, c) => Math.max(most, c.end), 0);
+  const mirrored = yield* curves(captions.map((c) => ({ start: first + last - c.end, end: first + last - c.start })));
+  const decoy = along(mirrored, run(mirrored));
+  if (cover - decoy < COVER_MIN_GAIN) return undefined;
+  // And in every part of the file but one (an opening or the credits can have little to cover): the
+  // file's eighths, each held against the decoy's cover of the whole.
+  const parts = Array.from({ length: COVER_PARTS }, (_, part) => {
+    const from = Math.floor((path.length * part) / COVER_PARTS);
+    const to = Math.floor((path.length * (part + 1)) / COVER_PARTS);
+    let sum = 0;
+    for (let w = from; w < to; w++) sum += real[w][path[w]];
+    return sum / Math.max(1, to - from);
+  }).sort((x, y) => x - y);
+  if (parts[1] - decoy < COVER_MIN_PART_GAIN) return undefined;
+  // Each stretch's shift to a finer step: where its windows' cover is greatest together.
+  const sorted = filled(captions);
+  const longest = sorted.reduce((most, c) => Math.max(most, c.end - c.start), 0);
+  const fillsOf = (w: (typeof windows)[number]) => own.get(w)!.reduce((sum, c) => sum + c.end - c.start, 0);
+  const anchors: Anchor[] = [];
+  for (let begun = 0, w = 1; w <= path.length; w++) {
+    if (w < path.length && Math.abs(path[w] - path[w - 1]) <= COVER_CREEP_STEPS) continue;
+    yield;
+    for (let n = begun; n < w; n++) {
+      const win = windows[n];
+      const fills = fillsOf(win);
+      // A window's own shift within a step of the run's: the run may creep from one window to the next.
+      let best = offsetAt(path[n]);
+      let most = -1;
+      for (let offset = offsetAt(path[n]) - COVER_STEP_MS; offset <= offsetAt(path[n]) + COVER_STEP_MS; offset += LINE_STEP_MS) {
+        // Its neighbours in the run count with it, so a window of few lines doesn't wander on its own.
+        let sum = 0;
+        for (let m = Math.max(begun, n - 1); m <= Math.min(w - 1, n + 1); m++) sum += coverAt(windows[m], m === n ? fills : fillsOf(windows[m]), sorted, longest, offset);
+        if (sum > most) (most = sum), (best = offset);
+      }
+      anchors.push({ from: win.from, to: win.to, offset: best, score: Math.round(real[n][path[n]] * 100) / 100 });
+    }
+    begun = w;
+  }
+  return { anchors, cover: Math.round(cover * 1000) / 1000, decoy: Math.round(decoy * 1000) / 1000 };
+}
+
+/** The step between the shifts a window's cover is measured at. */
+const COVER_STEP_MS = 100;
+/** How many of those steps a run's shift may move from one window to the next and stay the same stretch. */
+const COVER_CREEP_STEPS = 3;
+/** What any other change of shift costs: this much of one window's full cover. */
+const COVER_CHANGE = 1;
+/**
+ * How much more of the file the run must cover than its decoy's run does, over the whole file and in
+ * its second-weakest eighth. Calibration (37,857 pairs of a file and another episode's or title's
+ * subtitle, 19,315 of which reach this test): no wrong pair is past both, the nearest at 0.138 over
+ * the file with 0.03 in that eighth, and those past 0.12 over the file have 0.03 at most in it. The
+ * right ones (three long episodes' translations made for another cut, three of a release whose own
+ * track is off its voices) gain 0.156 to 0.239 over the file and 0.111 to 0.176 in that eighth.
+ */
+const COVER_MIN_GAIN = 0.15;
+const COVER_MIN_PART_GAIN = 0.08;
+const COVER_PARTS = 8;
+
+/**
  * The timing in stretches (farStretches), when it shows the timing the windows' own fits gave to be
  * wrong somewhere: dub captions' lines are another script's, and a window's best overlap is at times
  * a chance one that its neighbours happen to accept (a minute or two then sits many seconds off).
@@ -3955,13 +4686,7 @@ function farStretches(captions: Cue[], windows: FileAnchors["windows"], single: 
     // a song's lines, evenly spaced, meet the captions' at many shifts by chance.
     const shifts: number[] = [];
     for (const curve of curves) {
-      const own: number[] = [];
-      const order = Array.from(curve.keys()).filter((k) => k >= earliest).sort((x, y) => curve[y] - curve[x]);
-      for (const k of order) {
-        if (own.length >= STRETCH_PEAKS || curve[k] < STRETCH_PEAK_LINES) break;
-        if (own.every((o) => Math.abs(k - o) > apart)) own.push(k);
-      }
-      for (const k of own) if (shifts.every((o) => Math.abs(k - o) > STRETCH_SAME)) shifts.push(k);
+      for (const k of windowPeaks(curve, earliest, apart)) if (shifts.every((o) => Math.abs(k - o) > STRETCH_SAME)) shifts.push(k);
     }
     if (shifts.length === 0) return undefined;
     const met = curves.map((curve) => shifts.map((k) => meets(curve, k)));
@@ -4088,6 +4813,43 @@ function farStretches(captions: Cue[], windows: FileAnchors["windows"], single: 
   });
   const anchors: Anchor[] = measuredWindows.map((w) => ({ from: w.from, to: w.to, offset: w.measured.offset, score: w.measured.score, ...(stepOf.has(w.from) ? { stepAt: stepOf.get(w.from) } : {}) }));
   return { measuredWindows, anchors };
+}
+
+/**
+ * A window's highest peaks in its startCurve, for farStretches: up to STRETCH_PEAKS steps from
+ * `earliest` on, each meeting at least STRETCH_PEAK_LINES line starts and more than `apart` steps from
+ * every one taken before it. The steps are tried highest count first, the earlier step first among
+ * equal counts.
+ *
+ * Only steps meeting STRETCH_PEAK_LINES or more can be taken, so only those are put in order, by a
+ * counting sort: one pass counts the steps at each count, a second places each step after those
+ * with a higher count and after the earlier ones with its own. That is the order a stable sort by
+ * count gives, without comparing the whole curve's steps.
+ */
+export function windowPeaks(curve: Int32Array, earliest: number, apart: number): number[] {
+  const from = Math.max(0, Math.ceil(earliest));
+  let top = STRETCH_PEAK_LINES - 1;
+  for (let k = from; k < curve.length; k++) if (curve[k] > top) top = curve[k];
+  if (top < STRETCH_PEAK_LINES) return [];
+  let order: ArrayLike<number>;
+  if (top - STRETCH_PEAK_LINES < curve.length) {
+    // place[top - count]: where the next step with that count goes in `order`.
+    const place = new Int32Array(top - STRETCH_PEAK_LINES + 2);
+    for (let k = from; k < curve.length; k++) if (curve[k] >= STRETCH_PEAK_LINES) place[top - curve[k] + 1]++;
+    for (let c = 1; c < place.length; c++) place[c] += place[c - 1];
+    const placed = new Int32Array(place[place.length - 1]);
+    for (let k = from; k < curve.length; k++) if (curve[k] >= STRETCH_PEAK_LINES) placed[place[top - curve[k]]++] = k;
+    order = placed;
+  } else {
+    // Counts spread wider than the curve is long (never so for counts of lines): a stable sort instead.
+    order = Array.from(curve.keys()).filter((k) => k >= from && curve[k] >= STRETCH_PEAK_LINES).sort((x, y) => curve[y] - curve[x]);
+  }
+  const own: number[] = [];
+  for (let n = 0; n < order.length && own.length < STRETCH_PEAKS; n++) {
+    const k = order[n];
+    if (own.every((o) => Math.abs(k - o) > apart)) own.push(k);
+  }
+  return own;
 }
 
 /** The fewest windows with spoken lines to find stretches among: a file read whole from its index, minute by minute. */
@@ -4802,6 +5564,8 @@ export interface SyncResult {
   byLines?: boolean;
   /** A shift per stretch found by where lines start, not by how they overlap (see byStarts). */
   byStarts?: boolean;
+  /** A shift per stretch found by how the lines fill the file's moments, further apart than the windows' search reaches (see coverStretches). */
+  byCover?: boolean;
   /** The captions were made for another frame rate: their times were multiplied by this (RATE_FACTORS). */
   factor?: number;
   /** Dub captions: ms the track's timing was moved by to meet the English voices (see refineBySpeech), the median over its stretches. */
@@ -4835,6 +5599,17 @@ export interface SyncResult {
    * no alternate that fits the track is preferred over it.
    */
   overTrack?: boolean;
+  /**
+   * Made once the file had a subtitle on its voices kept in its own track's place (KeptLines, "voiced"):
+   * a translation is then timed by those lines (reference "voiced"). One made before is made again.
+   */
+  voiced?: boolean;
+  /**
+   * Fitting nothing in the file's own track, it was held against the lines of a subtitle that fits
+   * it (KeptLines, "fitting"); timed by them, its reference is "subtitle". An unsynced one made
+   * before the file had such lines is made again.
+   */
+  fittingTried?: boolean;
   /**
    * With speechPending, once MORE_SPOTS are heard: where the audio is heard next, for a step speech
    * hints at and can't place (stepSpots). Kept with the result, so the read can be started again.
@@ -4887,7 +5662,7 @@ export function firstPassSync(key: string): SyncResult | undefined {
 }
 
 /** Bumped when the sync method changes: older results are ignored and download URLs change, so no cache keeps old timing. */
-export const SYNC_VERSION = 37;
+export const SYNC_VERSION = 38;
 
 /**
  * Whether captions belong to the file at all: at least half of the measured
@@ -5114,12 +5889,15 @@ export function syncCaptions(
       return syncCaptions(key, caption, aiostreamsUrl, videoId, type, filename, lang, opts);
     });
   }
-  const job = (async () => {
+  /** `by`: a subtitle that fits the file, to time these by its lines after they fit nothing in the file's own track (KeptLines, "fitting"). */
+  const run = async (by?: KeptLines): Promise<SyncResult | undefined> => {
     const meta = path.join(cachePath("synced"), `${key}.json`);
-    try {
+    if (!by) try {
       const done = JSON.parse(await readFile(meta, "utf8")) as SyncResult;
       if (existsSync(done.file)) {
-        if (!done.voicesPending && !done.speechPending && !done.trackCheckPending) return done;
+        // Finished, unless the file has since had lines kept that time it otherwise (linesKeptSince):
+        // then it is made again below.
+        if (!done.voicesPending && !done.speechPending && !done.trackCheckPending && !(await linesKeptSince(done, filename))) return done;
         // The file's track is being checked against its voices: served as timed while that is heard,
         // and synced again below once it has been (or couldn't be).
         if (done.trackCheckPending && voiceSpotJobs.has(filename)) return done;
@@ -5146,6 +5924,13 @@ export function syncCaptions(
     // stored: the file's readings as kept on disk; found: the track these captions are timed by.
     let stored = await fileAnchors(aiostreamsUrl, videoId, type, filename);
     if (!stored) return undefined; // lookup failed: try again next time
+    // A file whose own track is off its voices, with a subtitle on them kept in its place: a
+    // translation is timed by that subtitle's lines (linesView). Not that subtitle itself.
+    const voicedKept = stored.speechOnly ? undefined : await keptLines(filename, "voiced");
+    const voicedRef = voicedKept && voicedKept.source !== path.basename(source.file) ? voicedKept : undefined;
+    /** The kept lines these are timed by in place of the file's own track: `by`, or its voiced lines. */
+    const voiced = lang ? (by ?? voicedRef) : undefined;
+    const marks: Partial<SyncResult> = { ...(voicedRef ? { voiced: true } : {}), ...(by ? { fittingTried: true } : {}) };
     // Lines running far past the file's end are another title's (outrunsFile): left as they are, with
     // nothing heard for them, so a fallback gets its turn at once. Unless they hold this file and more
     // after it (an episode and the next in one subtitle): then the lines inside the file's length are
@@ -5161,16 +5946,19 @@ export function syncCaptions(
       count("sync.outruns");
       count("sync.unsynced");
       if (!stored.speechOnly) noteTrackMisfit(key);
-      const result: SyncResult = { file: source.file, anchors: [], noFit: true, outruns: true, filename, source: path.basename(source.file) };
+      const result: SyncResult = { file: source.file, anchors: [], noFit: true, outruns: true, filename, source: path.basename(source.file), ...marks };
       await mkdir(cachePath("synced"), { recursive: true });
       if (!standInFor(filename)) await writeWhole(meta, JSON.stringify(result));
       return result;
     }
-    const pick: TrackPick = stored.speechOnly ? { track: "first" } : await finishBetweenRequests(trackChoiceSteps(stored, captions, lang));
+    const pick: TrackPick = stored.speechOnly || voiced ? { track: "first" } : await finishBetweenRequests(trackChoiceSteps(stored, captions, lang));
     const track = pick.track;
-    const viewOf = (s: FileAnchors) => (track === undefined ? noLines(s) : track === "first" ? s : trackView(s, track));
+    const viewOf = (s: FileAnchors) => (voiced ? linesView(s, voiced.lines) : track === undefined ? noLines(s) : track === "first" ? s : trackView(s, track));
     let found = viewOf(stored);
-    if (track === undefined) console.log(`sync: ${filename}: every subtitle track has under half as many lines as the captions, timing by speech only`);
+    if (voiced) {
+      count(by ? "sync.byFitting" : "sync.voiced");
+      console.log(`sync: ${filename}: ${by ? "fits nothing in the file's own subtitle track: timing by a subtitle that fits it" : "its own subtitle track is off its voices: timing by the subtitle that is on them"} (${voiced.lines.length} lines)`);
+    } else if (track === undefined) console.log(`sync: ${filename}: every subtitle track has under half as many lines as the captions, timing by speech only`);
     else if (track !== "first" && track === tracksToTry(stored, lang)[0]) {
       count("sync.ownLanguageTrack");
       console.log(`sync: ${filename}: timing by its own ${stored.trackLangs?.[String(track)]} track ${track}`);
@@ -5228,7 +6016,7 @@ export function syncCaptions(
     }
     // Gaps or disagreement: read more of the file there, then measure again. Rounds are
     // kept with the file, so later captions for it start from what's already read.
-    while ((found.rounds ?? 0) < MAX_ROUNDS) {
+    while (!by && (found.rounds ?? 0) < MAX_ROUNDS) {
       const spans =
         (found.rounds ?? 0) === 0
           ? refinementStarts(found, anchors).map((from) => ({ from, length: EXTRA_WINDOW_MS }))
@@ -5297,8 +6085,9 @@ export function syncCaptions(
     let lineTimed: Map<number, number> | undefined;
     let lineTrack: "first" | number | undefined;
     if (anchors.length === 0 && lang) {
-      const lined = byLines(stored, captions, lang);
-      if (lined && !notTheFile(lined.track === "first" ? stored : trackView(stored, lined.track), shiftLookup(lined.shifts), "its lines pair with the file's")) {
+      const paired = voiced ? found : stored;
+      const lined = byLines(paired, captions, lang);
+      if (lined && !notTheFile(lined.track === "first" ? paired : trackView(paired, lined.track), shiftLookup(lined.shifts), "its lines pair with the file's")) {
         lineTimed = lined.shifts;
         lineTrack = lined.track;
         anchors = lined.anchors;
@@ -5321,6 +6110,8 @@ export function syncCaptions(
     // No shift fits by how the lines overlap, yet they start where the file's lines start, with a
     // shift per stretch (see byStarts). Translations only, as with snapping.
     let startTimed = false;
+    /** Timed in stretches by how its lines fill the file's moments (coverStretches). */
+    let coverTimed = false;
     if (anchors.length === 0 && lang) {
       const started = byStarts(found, captions);
       if (started && !notTheFile(found, planShifts(started.anchors, captions, [], true), "the line starts fit a shift per stretch")) {
@@ -5331,14 +6122,27 @@ export function syncCaptions(
         console.log(`sync: ${filename}: no shift fits by overlap, but the line starts do: ${started.landed} of ${started.windows} windows on the timing`);
       }
     }
-    // Nothing fits the subtitle track: speech in the audio, as a last resort.
+    // Nothing fits the subtitle track: a translation is timed by the lines of a subtitle that fits
+    // it, where the file has one kept (KeptLines, "fitting"), by every way above. Timed so, it is
+    // served as any timing by lines is; else it goes on as before.
+    if (anchors.length === 0 && by) return undefined;
+    if (anchors.length === 0 && lang && !voiced && !found.speechOnly && factor === 1) {
+      const fitting = await keptLines(filename, "fitting");
+      if (fitting && fitting.source !== path.basename(source.file)) {
+        marks.fittingTried = true;
+        const timed = await run(fitting);
+        if (timed) return timed;
+      }
+    }
+    // Speech in the audio, as a last resort.
     if (anchors.length === 0 && !found.speechOnly) noteTrackMisfit(key);
     let reference = found.windows.flatMap((w) => w.cues);
     let heard = false;
     /** Windows whose speech could be measured, when timed by speech: each should land on the timing. */
     let speechWindows = 0;
-    // A file timed from its index has no audio read yet: it's heard now, the last resort's turn.
-    if (anchors.length === 0 && stored.source === "index" && stored.audio !== undefined && stored.speechBy !== "silero") {
+    // A file timed from its index has no audio read yet, nor has one whose pictures were read in windows
+    // (a picture track's read takes no audio with it): it's heard now, the last resort's turn.
+    if (anchors.length === 0 && (stored.source === "index" || stored.image) && stored.audio !== undefined && stored.speechBy !== "silero") {
       const withSpeech = await addSpeech(stored, aiostreamsUrl, videoId, type, filename);
       if (withSpeech) {
         stored = withSpeech;
@@ -5385,6 +6189,25 @@ export function syncCaptions(
         }
       } else if (found.speechOnly && !speech) console.log(`sync: ${filename}: speech in the audio doesn't time these captions clearly enough, left as they are`);
     }
+    // Nor does anything above, speech included: lines that start elsewhere than the file's still fill
+    // the same moments, in stretches further apart than the windows' search reaches (coverStretches).
+    // After speech, so captions that are on the voices as they came are found so first, on a file
+    // whose own track is off them; and where the voices heard time the captions as moved clearly
+    // elsewhere, the track's timing isn't the voices': not followed.
+    if (anchors.length === 0 && !found.speechOnly && factor === 1) {
+      const covered = await finishBetweenRequests(coverStretchesSteps(found, captions));
+      const plan = covered ? planShifts(covered.anchors, captions) : undefined;
+      const moved = plan ? captions.map((c) => ({ start: c.start + plan(c.start), end: c.end + plan(c.start) })) : [];
+      const voices = plan ? bySpeech(found, moved, lang ? SPEECH_LEAD_MS : voiceLeadFor(source.file)) : undefined;
+      const elsewhere = voices !== undefined && !voices.anchors.some((a) => Math.abs(a.offset) <= LAND_MS);
+      if (covered && plan && !elsewhere && holdsTogether(covered.anchors) && moved.filter((c) => c.start < 0).length <= FAR_MAX_BEFORE_START && !notTheFile(found, plan, "its lines fill the file's moments in stretches")) {
+        anchors = covered.anchors;
+        coverTimed = true;
+        noFit = false;
+        count("sync.byCover");
+        console.log(`sync: ${filename}: nothing else fits, but its lines fill the file's moments in ${shiftChanges(covered.anchors) + 1} stretches: ${Math.round(covered.cover * 100)}% covered, ${Math.round(covered.decoy * 100)}% by the same lines in mirrored order`);
+      } else if (covered && elsewhere) console.log(`sync: ${filename}: its lines fill the file's moments in stretches, but the voices heard time them elsewhere: the track isn't followed`);
+    }
     // A file with no subtitle track whose speech didn't time these clearly (no fit, one resting on few
     // windows, or a window heard well that lands elsewhere: the timing may step there): more of its
     // audio is heard in the background, and they are synced again by it on the next request (see
@@ -5399,7 +6222,7 @@ export function syncCaptions(
     count(anchors.length ? "sync.synced" : "sync.unsynced");
     if (anchors.length === 0) {
       if (!noFit) console.log(`sync: ${filename}: no anchor matched, captions left as they are`);
-      const result: SyncResult = { file: source.file, anchors, ...(noFit ? { noFit } : {}), filename, source: path.basename(source.file), ...pending };
+      const result: SyncResult = { file: source.file, anchors, ...(noFit ? { noFit } : {}), filename, source: path.basename(source.file), ...pending, ...marks };
       if (!standInFor(filename)) await writeWhole(meta, JSON.stringify(result));
       if (speechPending) hearMoreSpeech(stored, aiostreamsUrl, videoId, type, filename, stepAt);
       return result;
@@ -5417,7 +6240,7 @@ export function syncCaptions(
     // (trackOffVoices) keeps the timing speech gave it: the track's lines neither refine nor snap it,
     // and no subtitle that fits the track takes its place (overTrack, see syncedWell).
     let overTrack = false;
-    if (heard && lang && !found.speechOnly) {
+    if (heard && lang && !found.speechOnly && !voiced) {
       const bySpeech = planShifts(anchors, captions, reference);
       const said = trackOffVoices(
         captions.map((c) => c.start + bySpeech(c.start)),
@@ -5443,6 +6266,20 @@ export function syncCaptions(
         : startTimed
           ? inOrder(captions, planShifts(anchors, captions, reference, true))
           : planShifts(anchors, captions, reference);
+    // Timed by kept lines: the timing must hold in every part of the subtitle (keptLinesMissed), or
+    // it isn't counted as synced.
+    if (voiced && !heard) {
+      const plan = planned;
+      const missed = keptLinesMissed(captions.map((c) => c.start + plan(c.start)), voiced.lines.map((c) => c.start));
+      if (missed) {
+        count("sync.keptLinesMissed");
+        console.log(`sync: ${filename}: timed by a subtitle's lines, but from ${Math.round(missed.from / 1000)}s to ${Math.round(missed.to / 1000)}s only ${missed.met} of ${missed.lines} line starts meet them (chance ${Math.round(missed.chance * 100)}%): not counted as synced`);
+        if (by) return undefined;
+        const result: SyncResult = { file: source.file, anchors: [], noFit: true, filename, source: path.basename(source.file), ...marks };
+        if (!standInFor(filename)) await writeWhole(meta, JSON.stringify(result));
+        return result;
+      }
+    }
     // Dub captions (no language) timed by the track then move onto the English voices, where the
     // audio has been heard and says so clearly (see refineBySpeech). Translations never do: byVoices
     // leaves them as they are, and nothing below moves dub captions.
@@ -5469,7 +6306,7 @@ export function syncCaptions(
     // only, and timing heard in speech only once the file's lines confirm it (followed).
     const snapping = Boolean(lang) && !found.speechOnly && !lineTimed && (!heard || Boolean(followed));
     const chosenLang = track === undefined ? undefined : stored.trackLangs?.[String(track === "first" ? stored.track : track)];
-    const ownLanguage = Boolean(lang && chosenLang && sameLanguage(chosenLang, lang));
+    const ownLanguage = Boolean(!voiced && lang && chosenLang && sameLanguage(chosenLang, lang));
     // A line the subtitle cuts in two is one line to the steps below, and its pieces move together
     // (see cutLines): its first piece alone would be paired a line off or left where it was.
     const cuts = snapping ? cutLines(text, ext, factor) : new Map<number, number>();
@@ -5479,7 +6316,7 @@ export function syncCaptions(
     // more than a frame below: a track timed apart from the chosen one has them where they are. Not on
     // the file's own track in the captions' language, which is this subtitle's timing for the release,
     // line for line, and is followed.
-    const onLines = snapping && !ownLanguage ? onFileLines(lines, planned, trackLines(stored)) : undefined;
+    const onLines = snapping && !ownLanguage ? onFileLines(lines, planned, trackLines(voiced ? found : stored)) : undefined;
     const stays = (start: number, move: number) => Boolean(onLines?.on.has(start)) && Math.abs(move) > FILM_FRAME_MS;
     if (onLines?.on.size) console.log(`sync: ${filename}: ${onLines.on.size} of ${lines.length} lines already sit on the file's lines (${Math.round(onLines.share * 100)}%): they stay within a frame`);
     const snapped = (shift: (start: number) => number) => {
@@ -5525,9 +6362,9 @@ export function syncCaptions(
     /** How far each line is moved as served, by its start. */
     const servedShift = (start: number) => (perLine ? perLine.shift(lead(start)) : timed.shift(lead(start)));
     let trackCheckPending = false;
-    if (lang && !heard && !found.speechOnly && !lineTimed && factor === 1) {
+    if (lang && !voiced && !heard && !found.speechOnly && !lineTimed && factor === 1) {
       const cameStarts = captions.map((c) => c.start);
-      const spots = await keptVoiceSpots(filename);
+      const spots = await keptVoiceSpots(readingsRef(filename));
       if (spots) {
         const said = voicesSay(cameStarts, servedShift, spots);
         if (said.came.lines || said.served.lines) console.log(`sync: ${filename}: against the voices heard, ${said.came.met} of ${said.came.lines} line starts meet one as it came and ${said.served.met} of ${said.served.lines} as timed by the track (chance ${Math.round(said.chance * 100)}%)${said.verdict ? `: ${said.verdict} is on the voices` : ": no clear answer, the track's timing stands"}`);
@@ -5535,9 +6372,10 @@ export function syncCaptions(
           count("sync.trackOffVoices");
           const result: SyncResult = { file: source.file, anchors: anchors.map((a) => ({ ...a, offset: 0 })), filename, source: path.basename(source.file), asCame: true };
           if (!standInFor(filename)) await writeWhole(meta, JSON.stringify(result));
+          await keepLines(filename, "voiced", path.basename(source.file), captions);
           return result;
         }
-      } else if (opts.forRelease && SPEECH_SYNC && stored.audio !== undefined && !voiceSpotsTried.has(filename)) {
+      } else if (opts.forRelease && SPEECH_SYNC && stored.audio !== undefined && !voiceSpotsTried.has(readingsRef(filename))) {
         let froms = trackCheckSpots(cameStarts, servedShift, stored.duration);
         // A file too heavy for three stretches hears two; one too heavy for two keeps the track's timing.
         while (froms.length > 2 && windowBytes(stored.bitrate, froms.length * TRACK_CHECK.spanMs) > TRACK_CHECK.maxBytes) froms = froms.slice(0, -1);
@@ -5575,8 +6413,8 @@ export function syncCaptions(
     const done = [...(movedLines ? [`${movedLines} lines moved onto their own line`] : []), ...(timed.nudges.size ? [`${timed.nudges.size} lines snapped to the file`] : [])];
     console.log(`sync: ${filename}: ${anchors.map((a) => `${Math.round(a.from / 1000)}s ${a.offset >= 0 ? "+" : ""}${a.offset}ms (${a.score})`).join(", ")}${done.length ? `; ${done.join(", ")}` : ""}`);
     const timedBy = lineTrack ?? track;
-    const measuredBy = heard || found.speechOnly || timedBy === undefined ? "speech" : (stored.trackLangs?.[String(timedBy === "first" ? stored.track : timedBy)] ?? "und");
-    const result: SyncResult = { file: out, anchors, filename, source: path.basename(source.file), ...(heard ? { bySpeech: true } : {}), ...(overTrack ? { overTrack: true } : {}), ...(found.speechOnly ? { speechOnly: true } : {}), ...(lineTimed ? { byLines: true } : {}), ...(startTimed ? { byStarts: true } : {}), ...(factor !== 1 ? { factor } : {}), ...(voiceShift !== undefined ? { voiceShift } : {}), reference: measuredBy, ...(timed.nudges.size ? { snapped: timed.nudges.size } : {}), ...(movedLines ? { moved: movedLines } : {}) };
+    const measuredBy = heard || found.speechOnly || timedBy === undefined ? "speech" : voiced ? (by ? "subtitle" : "voiced") : (stored.trackLangs?.[String(timedBy === "first" ? stored.track : timedBy)] ?? "und");
+    const result: SyncResult = { file: out, anchors, filename, source: path.basename(source.file), ...(heard ? { bySpeech: true } : {}), ...(overTrack ? { overTrack: true } : {}), ...(found.speechOnly ? { speechOnly: true } : {}), ...(lineTimed ? { byLines: true } : {}), ...(coverTimed ? { byCover: true } : {}), ...(startTimed ? { byStarts: true } : {}), ...(factor !== 1 ? { factor } : {}), ...(voiceShift !== undefined ? { voiceShift } : {}), reference: measuredBy, ...(timed.nudges.size ? { snapped: timed.nudges.size } : {}), ...(movedLines ? { moved: movedLines } : {}), ...marks };
     // Dub captions the track timed on a file whose English audio is still to be heard: it is read in
     // the background, and these are synced again by it on the next request (see hearDubVoices).
     // Not for the file's own track (ownTimed): the voices wouldn't move it.
@@ -5584,10 +6422,18 @@ export function syncCaptions(
     Object.assign(result, pending);
     if (trackCheckPending) result.trackCheckPending = true;
     if (!standInFor(filename)) await writeWhole(meta, JSON.stringify(result));
+    const asServed = () => captions.map((c) => ({ start: c.start + servedShift(c.start), end: c.end + servedShift(c.start) }));
+    if (overTrack) await keepLines(filename, "voiced", path.basename(source.file), asServed());
+    // A translation the file's own track timed over most of its windows with lines: kept for the
+    // subtitles that fit nothing in that track. Never one timed by kept lines itself, by speech, or
+    // while its track is still being checked against the voices.
+    const withLines = found.windows.filter((w) => !w.heard && !w.bridge && w.cues.length > 0).length;
+    if (lang && !voiced && !heard && !coverTimed && !found.speechOnly && factor === 1 && !trackCheckPending && withLines > 0 && anchors.length >= FITTING_MIN_WINDOWS * withLines) await keepLines(filename, "fitting", path.basename(source.file), asServed());
     if (result.voicesPending) hearDubVoices(stored, aiostreamsUrl, videoId, type, filename, anchors);
     if (speechPending) hearMoreSpeech(stored, aiostreamsUrl, videoId, type, filename, stepAt);
     return result;
-  })().catch((error) => {
+  };
+  const job = run().catch((error) => {
     readFailed(filename, error);
     return undefined;
   });

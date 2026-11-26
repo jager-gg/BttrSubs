@@ -119,7 +119,19 @@ const NONE_TTL = 60 * 60;
 const FAILED_TTL = 10 * 60;
 
 /** One entry's metadata for a season map: the day's cached copy (kitsuToImdb's too) when it has the titles. */
-async function kitsuEntry(type: string, kitsuId: string): Promise<KitsuMap | undefined> {
+function kitsuEntry(type: string, kitsuId: string): Promise<KitsuMap | undefined> {
+  const under = readingEntries.get(`${type}:${kitsuId}`);
+  if (under) return under;
+  const work = readKitsuEntry(type, kitsuId).finally(() => readingEntries.delete(`${type}:${kitsuId}`));
+  readingEntries.set(`${type}:${kitsuId}`, work);
+  return work;
+}
+
+/** Entries being read right now, and maps being made: each is asked for once, whoever else asks meanwhile. */
+const readingEntries = new Map<string, Promise<KitsuMap | undefined>>();
+const makingMaps = new Map<string, Promise<SeasonMap | undefined>>();
+
+async function readKitsuEntry(type: string, kitsuId: string): Promise<KitsuMap | undefined> {
   const key = cacheKey({ kind: "kitsu-imdb", kitsuId });
   const cached = await readJsonCache<KitsuMap>("results", key);
   if (cached?.titles) return cached;
@@ -151,16 +163,37 @@ interface SearchResult {
  * when its answer may hold them all (SEARCH_PAGE); a show with more than MAX_ENTRIES has none.
  * Kept a week; a show with none, an hour; a failure, ten minutes.
  */
-export async function seasonMap(imdbId: string, showName: () => Promise<string | undefined>): Promise<SeasonMap | undefined> {
+export function seasonMap(imdbId: string, showName: () => Promise<string | undefined>): Promise<SeasonMap | undefined> {
+  // An episode's list and the next one's, started beside it, want the same map: it is made once.
+  const under = makingMaps.get(imdbId);
+  if (under) return under;
+  const work = makeSeasonMap(imdbId, showName).finally(() => makingMaps.delete(imdbId));
+  makingMaps.set(imdbId, work);
+  return work;
+}
+
+async function makeSeasonMap(imdbId: string, showName: () => Promise<string | undefined>): Promise<SeasonMap | undefined> {
   const key = cacheKey({ kind: "season-map", imdbId });
   const cached = await readJsonCache<{ map?: SeasonMap; made?: number }>("results", key);
   // A map whose entries lack their Kitsu ids is read again: Anime Tosho's episode search needs them.
   if (cached && cached.made === MAP_MADE && !cached.map?.entries.some((e) => !e.kitsuId)) return cached.map;
+  const started = Date.now();
+  // The entries the lists file under the show are read while its name is fetched and searched for:
+  // the map reads them next, and finds them in or under way.
+  const listsWork = Promise.race([animeLists(), new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), LISTS_WAIT_MS).unref())]);
+  void listsWork.then(
+    (lists) => {
+      const listed = lists?.kitsuOfImdb.get(imdbId) ?? [];
+      if (listed.length >= 2 && listed.length <= MAX_ENTRIES) for (const entry of listed) void kitsuEntry(entry.film ? "movie" : "series", String(entry.kitsuId)).catch(() => undefined);
+    },
+    () => undefined
+  );
   const show = await showName();
   if (!show) return undefined;
+  const named = Date.now();
   let map: SeasonMap | undefined;
   try {
-    const lists = await Promise.race([animeLists(), new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), LISTS_WAIT_MS).unref())]);
+    const lists = await listsWork;
     const listed = lists?.kitsuOfImdb.get(imdbId) ?? [];
     let found: SearchResult[] = [];
     try {
@@ -178,6 +211,7 @@ export async function seasonMap(imdbId: string, showName: () => Promise<string |
     }
     for (const entry of listed) if (!wanted.has(String(entry.kitsuId))) wanted.set(String(entry.kitsuId), { type: entry.film ? "movie" : "series", searched: false });
     const whole = listed.length > 0 || found.length < SEARCH_PAGE;
+    const searched = Date.now();
     if (wanted.size >= 2 && wanted.size <= MAX_ENTRIES && whole) {
       const read = await Promise.all(
         [...wanted].map(async ([kitsuId, from]) => {
@@ -193,6 +227,8 @@ export async function seasonMap(imdbId: string, showName: () => Promise<string |
       );
       const entries = read.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
       if (entries.length >= 2) map = { show, entries };
+      // Where a first play's wait for the map goes.
+      console.log(`season map: ${imdbId}: name in ${named - started} ms, search ${searched - named} ms, ${wanted.size} entries ${Date.now() - searched} ms`);
     }
   } catch {
     await writeJsonCache("results", key, { made: MAP_MADE }, FAILED_TTL);

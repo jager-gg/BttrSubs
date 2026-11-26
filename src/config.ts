@@ -64,6 +64,7 @@ export const DEFAULTS = {
   allowedAiostreams: PUBLIC_AIOSTREAMS,
   updateCheck: true,
   listBudgetMs: 8000,
+  fileWaitMs: 1500,
   maxPerLanguage: 3,
   animeTitlesDataset: true,
   logDays: 7,
@@ -73,6 +74,7 @@ export const DEFAULTS = {
 /** The range each number is kept in: .env's is brought into it, the dashboard refuses one outside it. */
 export const RANGES = {
   listBudgetMs: [2000, 20_000],
+  fileWaitMs: [1500, 10_000],
   maxPerLanguage: [1, 3],
   logDays: [0, 90],
   logMaxMb: [1, 10_000]
@@ -109,6 +111,7 @@ export const fromEnv = {
   resultCacheTtlSeconds: parseNumber(env.RESULT_CACHE_TTL_SECONDS),
   updateCheck: parseSwitch(env.UPDATE_CHECK),
   listBudgetMs: within(parseNumber(env.LIST_BUDGET_MS), RANGES.listBudgetMs, true),
+  fileWaitMs: within(parseNumber(env.FILE_WAIT_MS), RANGES.fileWaitMs, true),
   maxPerLanguage: within(parseNumber(env.MAX_SUBTITLES_PER_LANGUAGE), RANGES.maxPerLanguage, true),
   privateStreamHosts: env.PRIVATE_STREAM_HOSTS ? parseHosts(env.PRIVATE_STREAM_HOSTS) : undefined,
   anidbClient: ANIDB_CLIENT.test(env.ANIDB_CLIENT ?? "") ? env.ANIDB_CLIENT : undefined,
@@ -154,6 +157,13 @@ export const config = {
    * configure page sets that timeout when it adds the addon, and names it for adding by hand.
    */
   listBudgetMs: fromEnv.listBudgetMs ?? DEFAULTS.listBudgetMs,
+  /**
+   * How much longer than its budget a list may wait for the playing file to be read and its tracks
+   * timed, in ms (FILE_WAIT_MS, 1.5 to 10 s). Sources are never waited for past the budget: only a
+   * file that is slow to open uses this, so its tracks say whether they synced on the first list. The
+   * addon's timeout in AIOStreams must stay above the budget plus this plus a second.
+   */
+  fileWaitMs: fromEnv.fileWaitMs ?? DEFAULTS.fileWaitMs,
   /**
    * The most subtitles a configuration may list for one language (MAX_SUBTITLES_PER_LANGUAGE, 1 to 3).
    * Each one listed is downloaded and timed on every play, so this is the server's say over what its

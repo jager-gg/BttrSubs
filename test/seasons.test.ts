@@ -51,6 +51,8 @@ const ANIME_JSON = JSON.stringify([
   { type: "Movie", anidb_id: 9703, kitsu_id: 9703, imdb_id: "tt0000971", tvdb_id: 5070 },
   { type: "OVA", anidb_id: 9704, kitsu_id: 9704, imdb_id: "tt0000971", tvdb_id: 5070 },
   { type: "Special", anidb_id: 9705, kitsu_id: 9705, imdb_id: "tt0000971", tvdb_id: 5070 },
+  { type: "TV", anidb_id: 9741, kitsu_id: 9741, imdb_id: "tt0000974", tvdb_id: 5090 },
+  { type: "TV", anidb_id: 9742, kitsu_id: 9742, imdb_id: "tt0000974", tvdb_id: 5090 },
   ...Array.from({ length: 25 }, (_, i) => ({ type: "TV", anidb_id: 9801 + i, kitsu_id: 9801 + i, imdb_id: "tt0000972", tvdb_id: 5080 }))
 ]);
 const animeList = (url: URL) =>
@@ -316,6 +318,29 @@ describe("the season map", () => {
     asked.length = 0;
     expect(await ids.seasonMap("tt0000972", async () => "Listed Many")).toBeUndefined();
     expect(asked.filter((p) => p.includes("/meta/"))).toEqual([]);
+  });
+
+  it("is made once for two lists asking at once, its listed entries read while the show's name is fetched", async () => {
+    const asked: string[] = [];
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = new URL(String(input));
+      const list = animeList(url);
+      if (list) return list;
+      asked.push(url.pathname.includes("/catalog/") ? "search" : url.pathname.split("/").at(-1)!);
+      if (url.pathname.includes("/catalog/")) return search([{ id: "kitsu:9741", type: "series", imdb_id: "tt0000974" }, { id: "kitsu:9742", type: "series", imdb_id: "tt0000974" }]);
+      const id = Number(/kitsu:(\d+)\.json$/.exec(url.pathname)?.[1]);
+      return json({ meta: { name: `Twice Show ${id}`, aliases: [], imdb_id: "tt0000974", videos: [{ id: `kitsu:${id}:1`, episode: 1, imdbSeason: id - 9740, imdbEpisode: 1 }] } });
+    });
+    // The show's name takes a while, as its title's look-up does on a first play.
+    let names = 0;
+    const name = () => new Promise<string>((resolve) => setTimeout(() => (names++, asked.push("name"), resolve("Twice Show")), 150));
+    const [one, two] = await Promise.all([ids.seasonMap("tt0000974", name), ids.seasonMap("tt0000974", name)]);
+    expect(one?.entries.map((e) => e.kitsuId).sort()).toEqual(["9741", "9742"]);
+    expect(two).toBe(one);
+    // One name, one search, each entry once; the entries asked for before the name was in.
+    expect(names).toBe(1);
+    expect([...asked].sort()).toEqual(["kitsu:9741.json", "kitsu:9742.json", "name", "search"]);
+    expect(asked.indexOf("name")).toBeGreaterThan(asked.indexOf("kitsu:9742.json"));
   });
 
   it("is made again when the kept one was made before the lists were read for it", async () => {

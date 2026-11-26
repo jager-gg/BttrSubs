@@ -18,6 +18,12 @@
  * don't cover, turned pieces), or that would come out far wider or narrower than it was, is left as it
  * is; so is a script that carries its own fonts. A style none of whose lines is laid out again keeps its
  * font.
+ *
+ * A row stays whole: pieces shown from one moment to another together, at one height, are one row, and a
+ * line whose new layout would set its pieces over others of their row, that they stood clear of, is left
+ * as it is too. In a style that takes the new font, every piece left where it stands is drawn as wide as
+ * the old font drew it (its width scaled by the old font's share of the new one's), so it fills the
+ * place made for it and no more.
  */
 import { FACES, type Face } from "./fontwidths.js";
 import { at, HEAVY_FONT, parseScript, playRes, SANS_FONT, SERIF_FONT, writeScript, type Script } from "./signs.js";
@@ -93,6 +99,12 @@ const SPAN_CHANGE = 2;
  */
 const CLOSEST = 0.5;
 
+/**
+ * Two pieces stand clear of each other when they share this share of the narrower one's width or less,
+ * and one stands over the other from the second share on.
+ */
+const CLEAR = 0.2;
+const COVERED = 0.35;
 const COMMON = new Set(Object.values(FONTS).map((f) => f.toLowerCase()));
 const ANCHOR = [0, 0, 0.5, 1, 0, 0.5, 1, 0, 0.5, 1];
 const num = "\\s*(-?\\d+(?:\\.\\d+)?)\\s*";
@@ -365,6 +377,8 @@ export function respaceSongs(text: string): { text: string; lines: number } | un
   const [s, e, st, tx] = ["Start", "End", "Style", "Text"].map((f) => at(script.eventFormat, f));
   const pieces: Piece[] = [];
   const drawn: Array<{ ev: Event; start: number; y: number; style: string }> = [];
+  // Pieces that can't be read into a line: turned, or of two lines.
+  const unread: Array<{ ev: Event; style: string; scaleX: number }> = [];
   for (const ev of script.events) {
     if (ev.kind !== "Dialogue") continue;
     const style = styles.get(ev.values[st] ?? "");
@@ -380,9 +394,12 @@ export function respaceSongs(text: string): { text: string; lines: number } | un
       drawn.push({ ev, start: stamp(ev.values[s]), y, style: ev.values[st] ?? "" });
       continue;
     }
-    if (/\\fr[xyz]?\s*-?(?:[1-9]|0\.\d*[1-9])/.test(tags)) continue;
     const plain = body.replace(/\{[^}]*\}/g, "").replace(/\\h/g, " ");
-    if (!plain.trim() || /\\[Nn]/.test(plain)) continue;
+    if (!plain.trim()) continue;
+    if (/\\fr[xyz]?\s*-?(?:[1-9]|0\.\d*[1-9])/.test(tags) || /\\[Nn]/.test(plain)) {
+      unread.push({ ev, style: ev.values[st] ?? "", scaleX: style.scaleX });
+      continue;
+    }
     const an = Number(/\\an([1-9])/.exec(tags)?.[1] ?? style.align);
     pieces.push({
       ev,
@@ -501,16 +518,60 @@ export function respaceSongs(text: string): { text: string; lines: number } | un
     shifted.set(p, { by: nx - slot.x, map: lay.map });
     return true;
   };
+  const plans = new Map<Piece[], Layout>();
   for (const line of lines) {
     const ratio = ratios.get(line[0].style);
-    if (!ratio) continue;
-    let changed = false;
-    const end = Math.max(...line.map((p) => p.end));
     const all = wholes.get(line);
     const own = styles.get(line[0].style);
-    const once = all && layout(all.row, ratio, [own?.marginL ?? 0, across - (own?.marginR ?? 0)]);
+    const once = ratio && all && layout(all.row, ratio, [own?.marginL ?? 0, across - (own?.marginR ?? 0)]);
+    if (!once) continue;
+    placeMade(once, all.made);
+    plans.set(line, once);
+  }
+  // A layout is kept only where it leaves a row as it was set. Pieces shown from one moment to another
+  // together, at one height, are one row: a line whose pieces would come to stand over such pieces, of
+  // another line or of none, that they stood clear of, is a row read in parts, and is left as it is.
+  const lineIx = new Map<Piece, number>();
+  lines.forEach((line, n) => line.forEach((p) => lineIx.set(p, n)));
+  const planned = lines.map((line) => plans.has(line));
+  const over = (p: Piece, q: Piece, px: number, pw: number, qx: number, qw: number) =>
+    Math.min(pw, qw) > 0 ? (Math.min(px + (1 - p.h) * pw, qx + (1 - q.h) * qw) - Math.max(px - p.h * pw, qx - q.h * qw)) / Math.min(pw, qw) : 0;
+  // Only styles with a layout to keep or leave, each style's pieces in order of appearance.
+  for (const style of new Set(lines.filter((line) => plans.has(line)).map((line) => line[0].style))) {
+    const row = pieces.filter((p) => p.style === style).sort((a, b) => a.start - b.start);
+    const ix = row.map((p) => lineIx.get(p) ?? -1);
+    const ratio = ratios.get(style) ?? 1;
+    const wide = row.map((p) => widthOf(p) ?? 0);
+    // Where a piece comes to stand and how wide: laid out again in the new font, else as it is at the old one's width.
+    const stands = (n: number): [number, number] => {
+      const nx = ix[n] >= 0 && planned[ix[n]] ? plans.get(lines[ix[n]])!.moved.get(slotOf.get(row[n])!) : undefined;
+      return nx === undefined ? [row[n].x, ratio * wide[n]] : [nx, wide[n]];
+    };
+    for (let again = true; again; ) {
+      again = false;
+      const wrong = new Set<number>();
+      for (let i = 0; i < row.length; i++) {
+        const p = row[i];
+        for (let j = i + 1; j < row.length && row[j].start - p.start <= HOP_MS; j++) {
+          if ((ix[i] === ix[j] && ix[i] >= 0) || !((ix[i] >= 0 && planned[ix[i]]) || (ix[j] >= 0 && planned[ix[j]]))) continue;
+          const q = row[j];
+          if (Math.abs(q.end - p.end) > HOP_MS || Math.abs(q.y - p.y) > Y_NEAR) continue;
+          if (over(p, q, p.x, ratio * wide[i], q.x, ratio * wide[j]) > CLEAR || over(p, q, ...stands(i), ...stands(j)) <= COVERED) continue;
+          for (const n of [ix[i], ix[j]]) if (n >= 0 && planned[n]) wrong.add(n);
+        }
+      }
+      for (const n of wrong) {
+        planned[n] = false;
+        plans.delete(lines[n]);
+        again = true;
+      }
+    }
+  }
+  for (const line of lines) {
+    let changed = false;
+    const end = Math.max(...line.map((p) => p.end));
+    const once = plans.get(line);
     if (once) {
-      placeMade(once, all.made);
       layouts.push({ style: line[0].style, y: line[0].y, beside: once.beside, at: [line[0].start, end], map: once.map });
       for (const p of line) changed = moveOn(p, once) || changed;
     }
@@ -523,6 +584,7 @@ export function respaceSongs(text: string): { text: string; lines: number } | un
 
   // A copy of a moved piece shown from the moment it ends (its last phase, fading out once its line is
   // gone) moves as it did.
+  const after = new Set<Piece>();
   const movedAs = new Map<string, Piece[]>();
   for (const q of shifted.keys()) movedAs.set(`${q.style}\u0000${q.text}`, [...(movedAs.get(`${q.style}\u0000${q.text}`) ?? []), q]);
   for (const p of pieces) {
@@ -531,6 +593,7 @@ export function respaceSongs(text: string): { text: string; lines: number } | un
     if (!q) continue;
     const as = shifted.get(q)!;
     p.ev.values[tx] = moveBy(p.ev.values[tx], as.by, as.map);
+    after.add(p);
   }
 
   // Shapes drawn with a line move as its pieces beside them do.
@@ -554,7 +617,24 @@ export function respaceSongs(text: string): { text: string; lines: number } | un
     if (face.bold && sf("Bold") >= 0) v[sf("Bold")] = "-1";
   }
   for (const p of pieces) if (done.has(p.style)) p.ev.values[tx] = p.ev.values[tx].replace(/\\fn[^\\}]+/g, `\\fn${p.face.name}`);
+  // A piece left where it stands, in a style that takes the new font, is drawn as wide as the old font
+  // drew it: its place was made for that width, and the new font's letters at their own would overlap
+  // their neighbours or stand apart.
+  const left = [...pieces.filter((p) => !shifted.has(p) && !after.has(p)), ...unread];
+  for (const p of left) if (done.has(p.style)) p.ev.values[tx] = asWide(p.ev.values[tx], ratios.get(p.style)!, p.scaleX);
   return { text: writeScript(script), lines: count };
+}
+
+/**
+ * A piece's tags with its width scaled by `ratio`: every \fscx it has (those it changes to over time
+ * too), and one at its start when it sets none there, from its style's.
+ */
+function asWide(body: string, ratio: number, styleScaleX: number): string {
+  const scaled = body.replace(/\\fscx(\d+(?:\.\d+)?)/g, (_m, value: string) => `\\fscx${fmt(Number(value) * ratio)}`);
+  const first = /\{([^}]*)\}/.exec(scaled);
+  if (first && first[1].includes("\\fscx") && /\\fscx\d/.test(first[1].replace(/\\t\([^)]*\)/g, ""))) return scaled;
+  const own = `\\fscx${fmt(styleScaleX * ratio)}`;
+  return first && first.index === 0 ? `{${own}${scaled.slice(1)}` : `{${own}}${scaled}`;
 }
 
 /**

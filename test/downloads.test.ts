@@ -37,6 +37,19 @@ describe("a subtitle asked for by several requests at once", () => {
     for (const folder of ["downloads", "subtitles"]) expect(readdirSync(path.join(CACHE, folder)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
+  it("is asked for once more when its source refuses for asking too often, and only once", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => (++calls === 1 ? new Response("slow down", { status: 429, headers: { "retry-after": "0" } }) : new Response(SRT))));
+    const got = await downloads.getCachedSubtitleFile("osen-880011", 1, 2, {});
+    expect(calls).toBe(2);
+    expect(readFileSync(got.file, "utf8")).toContain("General greeting.");
+    // Refused twice, it fails: nothing is asked a third time.
+    calls = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => (calls++, new Response("slow down", { status: 429, headers: { "retry-after": "0" } }))));
+    await expect(downloads.getCachedSubtitleFile("osen-880012", 1, 2, {})).rejects.toThrow(/HTTP 429/);
+    expect(calls).toBe(2);
+  });
+
   it("is tried again after a download that failed, by the next request", async () => {
     let calls = 0;
     vi.stubGlobal("fetch", vi.fn(async () => (++calls === 1 ? new Response("no", { status: 500 }) : new Response(SRT))));

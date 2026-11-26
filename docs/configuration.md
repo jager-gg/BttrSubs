@@ -16,9 +16,17 @@ Without it, a file is read only from the public internet and from your own AIOSt
 
 How long a subtitle list may take before it answers with what it has, from 2,000 to 20,000 ms (8,000 unless set).
 
-- A list can take 1.5 s longer: on a first play, and when a source used the whole time and the tracks are still being timed to the file. This addon's timeout in AIOStreams (7,000 ms unless changed) must be at least the budget plus 2,500 ms, or AIOStreams drops the whole list. **Add to AIOStreams** on the configure page sets it to the budget plus 3,000 ms (11,000 ms unless the budget is changed); the page names the same number for adding the addon by hand.
+- A list can take 1.5 s longer (`FILE_WAIT_MS`): on a first play, and when a source used the whole time and the tracks are still being timed to the file. This addon's timeout in AIOStreams (7,000 ms unless changed) must be at least the budget plus 2,500 ms, or AIOStreams drops the whole list. **Add to AIOStreams** on the configure page sets it to the budget plus 3,000 ms (11,000 ms unless either is changed); the page names the same number for adding the addon by hand.
 - A longer budget waits for slow sources, and playback starts later.
 - A source that answers after the list has been sent isn't wasted. Its subtitles are tried as fallbacks when the listed ones don't fit the file.
+
+### `FILE_WAIT_MS`
+
+How much longer than `LIST_BUDGET_MS` a list may wait for the playing file to be read and its tracks timed, from 1,500 to 10,000 ms (1,500 unless set).
+
+- Only a file that is slow to open uses it (a large remux, a release its host has to fail over from). Sources are never waited for past the budget, and a list is answered as soon as every track's state is known.
+- With more of it, a slow file's tracks say whether they synced on the first list, where they said "Auto sync"; on those plays the list takes that much longer.
+- A configuration uses only as much of it as its entry's timeout in AIOStreams leaves room for (the budget plus this plus 1,000 ms), so no list is dropped: BttrSubs reads that timeout with the configuration's saved AIOStreams password. Press **Add to AIOStreams** again after setting this; it sets the timeout to the budget plus this plus 1,500 ms. A configuration whose timeout wasn't raised, or that has no password saved, keeps 1,500 ms.
 
 ### `MAX_SUBTITLES_PER_LANGUAGE`
 

@@ -13,19 +13,79 @@
  */
 import { randomBytes } from "node:crypto";
 import { accountIn } from "./aiostreamsAccount.js";
-import { config } from "./config.js";
+import { config, DEFAULTS } from "./config.js";
 import type { Settings } from "./profile.js";
 
 /** How long AIOStreams gets to answer: a save checks every addon in the configuration. */
 const TIMEOUT_MS = 30_000;
 /**
- * What the entry's timeout is over the list's time: a list can take 1.5 s longer on a first play,
- * and AIOStreams drops an addon's whole answer past its timeout.
+ * What the entry's timeout is over the list's time and its grace (FILE_WAIT_MS): AIOStreams drops
+ * an addon's whole answer past its timeout.
  */
-const TIMEOUT_OVER_LIST_MS = 3000;
+const TIMEOUT_OVER_GRACE_MS = 1500;
 /** The timeout this addon's entry in AIOStreams needs for the list's time as it is set now, in ms. */
-export const entryTimeoutMs = (): number => config.listBudgetMs + TIMEOUT_OVER_LIST_MS;
+export const entryTimeoutMs = (): number => config.listBudgetMs + config.fileWaitMs + TIMEOUT_OVER_GRACE_MS;
 const ENTRY_NAME = "BttrSubs";
+
+/** The least an entry's timeout must be over the list's time and the grace it is given. */
+const ENTRY_MARGIN_MS = 1000;
+/** How long an entry's timeout, once read, is gone by before it is read again. */
+const ENTRY_KEPT_MS = 10 * 60 * 1000;
+/** Each configuration's entry timeout as last read from its AIOStreams, by install URL; `ms` undefined when it couldn't be read. */
+const entryTimeouts = new Map<string, { ms: number | undefined; at: number }>();
+const entryReads = new Map<string, Promise<void>>();
+
+/**
+ * The grace a list of this configuration may use (FILE_WAIT_MS): no more than the timeout its entry
+ * in AIOStreams has leaves over the list's time, since AIOStreams drops the whole of a list that
+ * answers past it. A longer grace so takes effect for a configuration only once its entry's timeout
+ * has been raised (Add to AIOStreams sets it), and never costs one that hasn't its subtitles.
+ *
+ * The entry is read with the configuration's saved password, in the background, and kept
+ * ENTRY_KEPT_MS: a list never waits for it. Until it is read, and where it can't be (no password
+ * saved, AIOStreams not answering), the grace is the default. With FILE_WAIT_MS at its default
+ * nothing is read.
+ */
+export function fileWaitFor(aiostreamsUrl: string | undefined, password: string | undefined): number {
+  if (config.fileWaitMs <= DEFAULTS.fileWaitMs) return config.fileWaitMs;
+  const account = aiostreamsUrl ? accountIn(aiostreamsUrl) : undefined;
+  if (!aiostreamsUrl || !account || !password || !config.publicBaseUrl) return DEFAULTS.fileWaitMs;
+  const kept = entryTimeouts.get(aiostreamsUrl);
+  if ((!kept || Date.now() - kept.at >= ENTRY_KEPT_MS) && !entryReads.has(aiostreamsUrl)) {
+    const read = readEntryTimeout(account, password)
+      .then((ms) => void entryTimeouts.set(aiostreamsUrl, { ms, at: Date.now() }))
+      .catch(() => void entryTimeouts.set(aiostreamsUrl, { ms: undefined, at: Date.now() }))
+      .finally(() => entryReads.delete(aiostreamsUrl));
+    entryReads.set(aiostreamsUrl, read);
+  }
+  return graceWithin(kept?.ms);
+}
+
+/** The grace an entry timeout of `timeoutMs` leaves room for: the one set, or less, never under the default. */
+export function graceWithin(timeoutMs: number | undefined): number {
+  if (timeoutMs === undefined) return DEFAULTS.fileWaitMs;
+  return Math.max(DEFAULTS.fileWaitMs, Math.min(config.fileWaitMs, timeoutMs - config.listBudgetMs - ENTRY_MARGIN_MS));
+}
+
+/** The timeout of this server's entry in a configuration of AIOStreams: the shortest, where it has more than one. */
+async function readEntryTimeout(account: { origin: string; uuid: string }, password: string): Promise<number | undefined> {
+  const base = account.origin === config.ownAiostreams ? config.aiostreamsBase : account.origin;
+  const read = await fetch(`${base}/api/v1/user?raw=true`, { headers: basic(account.uuid, password), signal: AbortSignal.timeout(TIMEOUT_MS) });
+  if (!read.ok) return undefined;
+  const body = (await read.json().catch(() => undefined)) as { data?: { userData?: { presets?: Preset[] } } } | undefined;
+  const presets = Array.isArray(body?.data?.userData?.presets) ? body.data.userData.presets : [];
+  const timeouts = presets
+    .filter((preset) => preset?.enabled !== false && typeof preset?.options?.manifestUrl === "string" && (preset.options.manifestUrl as string).startsWith(`${config.publicBaseUrl}/`))
+    .map((preset) => Number(preset.options?.timeout))
+    .filter((ms) => Number.isFinite(ms) && ms > 0);
+  return timeouts.length ? Math.min(...timeouts) : undefined;
+}
+
+/** For tests: forget every entry timeout read. */
+export function forgetEntryTimeouts(): void {
+  entryTimeouts.clear();
+  entryReads.clear();
+}
 
 export type AddedToAiostreams = { state: "added" | "updated" | "present"; name: string } | { error: string };
 

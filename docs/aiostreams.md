@@ -34,11 +34,13 @@ Without a linked account, BttrSubs asks with an install URL of its own. Most pla
 
 An anime episode asked for by its IMDb id (`tt…:1:27`) has a second id, the one the anime lists give it (`kitsu:…:27`), and AIOStreams keeps a list for each id it is asked with: a search by one isn't the search by the other. A Jellyfin server that lists anime by Kitsu ids shows that list, and can send the subtitle request with the IMDb id (subtitle addons answer those), with nothing that says which id the list was asked for by. So at each step, a list that lacks the file is asked for again by the other id before the next step.
 
+When the list by the first id is slow, the other id is asked alongside it, and the file is taken from whichever list has it first.
+
 It stops at the first one that has the file. A file it can't find isn't synced, rather than synced to another file.
 
-A release that fails when it is opened (a usenet post with no video in it, say) is replaced by AIOStreams with the next one that plays, and the player goes on naming the one that was picked. BttrSubs opens the picked release's link, gets the same replacement, and times the subtitles to the file that plays.
+## AIOStreams' limit on stream lists
 
-Every lookup carries the viewer's address (`X-AIOStreams-User-IP`, which AIOStreams passes to every addon with a subtitle request), so AIOStreams treats it as the same viewer.
+AIOStreams limits how many stream lists one address may ask for (ten in fifteen seconds by default). BttrSubs reads the limit from AIOStreams' answers and stays within it: lookups wait for the next window, identical lookups share one request, and the playing file comes before an episode asked ahead. There is nothing to set.
 
 ## The pipeline cache
 

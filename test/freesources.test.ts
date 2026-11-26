@@ -115,6 +115,8 @@ describe("TheSubtitleDB", () => {
       ["tb101", "portuguese (br)", "Show.S01E02.1080p.WEB", false, true],
       ["tb102", "portuguese (br)", "[Group] Show - 02 [1080p]", true, true]
     ]);
+    // A row that names its format as ASS says so, so a list can link it as a styled subtitle before it is fetched.
+    expect(found.map((s) => Boolean(s.styled))).toEqual([false, true, false, true]);
     expect(tsdb.theSubtitleDbDownloadUrl("tb102")).toBe("https://api.thesubtitledb.org/get/102");
     expect(tsdb.theSubtitleDbDownloadUrl("tbx")).toBeUndefined();
   });

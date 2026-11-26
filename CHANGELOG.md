@@ -2,6 +2,19 @@
 
 Each version is a tag (`v1.0.0`) with an image on GitHub's registry (`ghcr.io/jager-gg/bttrsubs:1.0.0`, `:1.0`, `:1` and `:latest`). Versions follow [semantic versioning](https://semver.org): a major version can need a step when upgrading, and its section says which.
 
+## [1.4.0]
+
+More subtitles sync, and timing is faster. Nothing to do when upgrading.
+
+- **More subtitles sync:** subtitles made for another frame rate or another cut, and loose translations, are timed where they were refused.
+- **Files whose own subtitle track is off the voices:** every language is timed to the voices, not to that track.
+- **Faster:** timing a subtitle takes about half the time, and a first list for anime waits on fewer sources.
+- **A subtitle site that stops answering** no longer leaves an empty track: the next subtitle takes its place, or the track says why.
+- **Signs & songs:** found through TsukiHime first, and song lyrics no longer overlap.
+- **Right-to-left subtitles:** punctuation stays on the correct side in styled tracks, and signs keep their order.
+- **Skip languages the file already has** counts picture subtitles (Blu-ray PGS, DVD) too, not only text tracks.
+- **Slow-opening files:** `FILE_WAIT_MS` lets a first list wait longer for the file, so its tracks show their real status. Off unless set.
+
 ## [1.3.0]
 
 New: songs with English Dub from more releases, and karaoke that no longer runs together. Changed: which styling a subtitle gets when more than one applies. Fixed: an English Dub track left empty when its dub captions were another episode's, anime played through a Jellyfin server left unsynced, and files with a very long header. Nothing to do when upgrading: subtitles are timed again the next time they are played.

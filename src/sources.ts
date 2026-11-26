@@ -309,6 +309,28 @@ export async function openSubtitles(request: StremioSubtitleRequest, languages: 
   return (await openSubtitlesOwnSearch(request, languages)) ?? openSubtitlesV3Plus(request, languages, allowMachine);
 }
 
+/**
+ * A list without the uploads it holds twice. TheSubtitleDB carries OpenSubtitles' uploads under
+ * OpenSubtitles' own ids, so a row of its with the id and language of an OpenSubtitles row in the
+ * list is that same upload: the OpenSubtitles row stays, with its flags, and the copy is left out, so
+ * it takes no place among a track's fallbacks.
+ * Calibration (2,412 kept answers): 1,671 of 3,062 OpenSubtitles ids are also TheSubtitleDB's, every
+ * one in the same language; the release names are equal in 1,619, and in the rest one is empty or a
+ * part of the other.
+ */
+export function withoutCopies(subtitles: SubSourceSubtitle[]): SubSourceSubtitle[] {
+  const listed = new Set<string>();
+  for (const sub of subtitles) {
+    const id = sub.source === "thesubtitledb" ? undefined : sub.ref?.match(/^os[a-z-]+-(\d+)$/)?.[1];
+    if (id) listed.add(`${id}|${sub.language.toLowerCase()}`);
+  }
+  if (listed.size === 0) return subtitles;
+  return subtitles.filter((sub) => {
+    const id = sub.source === "thesubtitledb" ? sub.ref?.match(/^tb(\d+)$/)?.[1] : undefined;
+    return !id || !listed.has(`${id}|${sub.language.toLowerCase()}`);
+  });
+}
+
 export function openSubtitlesDownloadUrl(ref: string): string | undefined {
   const match = ref.match(/^os([a-z-]+)-(\d+)$/);
   return match ? `${OPENSUBTITLES_V3_PLUS}/sub.vtt/?lang_code=${match[1]}&sub_id=${match[2]}` : undefined;

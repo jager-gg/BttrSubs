@@ -153,6 +153,45 @@ describe("a song set piece by piece in a font players lack", () => {
     expect(seconds[1] - seconds[0]).toBeCloseTo((width("ko") + width("ne")) / 2, 1);
   });
 
+  it("draws a piece it leaves where it stands as wide as the old font drew it", () => {
+    // Turned pieces can't be read into a line: they keep their places, made for a font a fifth narrower.
+    const turned = [
+      "Dialogue: 4,0:00:10.00,0:00:14.00,OP - Romaji,,0,0,0,,{\\an5\\pos(200,300)\\frz20}la",
+      "Dialogue: 4,0:00:10.00,0:00:14.00,OP - Romaji,,0,0,0,,{\\an5\\frz20\\fscx120\\pos(260,300)\\t(0,200,\\fscx150)}la",
+      "Dialogue: 4,0:00:10.00,0:00:14.00,OP - Romaji,,0,0,0,,\\frz is in no tag here{\\frz20\\an5\\pos(320,300)}la"
+    ].join("\n");
+    const out = eventsOf(respaceSongs(script("Flux", turned))!.text).filter((e) => e.text.includes("\\frz20"));
+    expect(out.map((e) => xOf(e.text))).toEqual([200, 260, 320]);
+    const scales = out.map((e) => [...e.text.matchAll(/\\fscx([\d.]+)/g)].map((m) => Number(m[1])));
+    expect(scales[0]).toHaveLength(1);
+    expect(scales[0][0]).toBeCloseTo(100 * NARROW, 0);
+    // Its own widths, the one it changes to over time too, scale alike.
+    expect(scales[1][0] / scales[0][0]).toBeCloseTo(1.2, 2);
+    expect(scales[1][1] / scales[0][0]).toBeCloseTo(1.5, 2);
+    // Text before the first tags: the width goes in tags of its own, ahead of it.
+    expect(out[2].text.startsWith(`{\\fscx${scales[0][0]}}`)).toBe(true);
+    // A sign in a font players have, and a line laid out again, take no width.
+    const all = eventsOf(respaceSongs(script("Flux", turned))!.text);
+    expect(all.filter((e) => e.style === "Sign" || (e.start === "0:00:10.00" && WORDS.flat().includes(e.plain) && !e.text.includes("\\frz"))).some((e) => e.text.includes("\\fscx"))).toBe(false);
+  });
+
+  it("keeps a row whole: a line whose layout would set its pieces over others of their row is left as it is", () => {
+    // One more syllable ends the row, set from its left edge (\an4) 2 px past the last one: read on its own,
+    // it stays, and the line laid out again without it would spread over it.
+    const last = placed[placed.length - 1];
+    const edge = last.x + (width(last.text) * NARROW) / 2 + 2;
+    const ends = `Dialogue: 4,0:00:10.00,0:00:14.00,OP - Romaji,,0,0,0,,{\\an4\\pos(${edge.toFixed(2)},51)}zu`;
+    const out = eventsOf(respaceSongs(script("Flux", ends))!.text).filter((e) => e.start === "0:00:10.00" && e.style === "OP - Romaji");
+    const scale = (e: { text: string }) => Number(/\\fscx([\d.]+)/.exec(e.text)?.[1] ?? 100) / 100;
+    const before = out.find((e) => e.plain === last.text)!;
+    const after = out.find((e) => e.plain === "zu")!;
+    expect(xOf(after.text)).toBeCloseTo(edge, 1);
+    expect(xOf(before.text) + (width(last.text) * scale(before)) / 2).toBeLessThanOrEqual(edge + 1);
+    // The row's pieces all stay where they were set, at the old font's width.
+    for (const p of placed) expect(xOf(out.find((e) => e.plain === p.text)!.text)).toBeCloseTo(p.x, 1);
+    expect(scale(before)).toBeCloseTo(NARROW, 1);
+  });
+
   it("moves a letter flying out of its line with that line", () => {
     const leave = letters.map((l) => `Dialogue: 4,0:00:14.00,0:00:14.15,OP - Romaji,,0,0,0,,{\\an5\\move(${l.x.toFixed(2)},51,${l.x.toFixed(2)},95)}${l.text}`).join("\n");
     const all = eventsOf(respaceSongs(script("Flux", leave))!.text);

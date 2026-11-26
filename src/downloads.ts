@@ -12,6 +12,7 @@ import { cachePath, writeFileWhole } from "./cache.js";
 import { fetchPublic, readCapped } from "./net.js";
 import { decodeSubtitle, utf16ToUtf8 } from "./text.js";
 import { count, noteError, noteKeyCall } from "./stats.js";
+import { retryAfterMs } from "./pace.js";
 import { downloadSubtitleArchive } from "./subsource.js";
 import { downloadSubtitleCat, notWrittenIn } from "./subtitlecat.js";
 import { downloadAnimeTosho } from "./animetosho.js";
@@ -87,6 +88,10 @@ function cacheName(ref: string): string {
   return plain ? plain[1] : ref.replace(/[^\w-]/g, "_");
 }
 
+/** How long a download refused with HTTP 429 waits before it is asked for once more, and the longest it waits when the answer names a time. */
+const ASK_AGAIN_MS = 1000;
+const ASK_AGAIN_MOST_MS = 3000;
+
 async function fetchSource(ref: string, keys: SourceKeys): Promise<Buffer> {
   const subsource = ref.match(/^(?:ss)?(\d+)$/);
   if (subsource) {
@@ -125,8 +130,17 @@ async function fetchSource(ref: string, keys: SourceKeys): Promise<Buffer> {
     url = openSubtitlesDownloadUrl(ref);
   }
   if (!url) throw new Error(`unknown subtitle ${ref}`);
-  const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  let response = await fetch(url, { signal: AbortSignal.timeout(20000) });
   if (ref.startsWith("sd")) noteKeyCall("subdl", keys.subdl, response, true);
+  // Refused for asking too often (two lists fetch their subtitles side by side): asked once more, after
+  // the time the answer names or a second, so the subtitle isn't lost to a moment's crowding.
+  if (response.status === 429) {
+    await response.body?.cancel().catch(() => undefined);
+    count("downloads.askedAgain");
+    await new Promise((resolve) => setTimeout(resolve, Math.min(retryAfterMs(response.headers.get("retry-after")) ?? ASK_AGAIN_MS, ASK_AGAIN_MOST_MS)));
+    response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    if (ref.startsWith("sd")) noteKeyCall("subdl", keys.subdl, response, true);
+  }
   // Never put the URL in the message: SubDL's carries the key.
   if (!response.ok) throw new Error(`download of ${ref} failed: HTTP ${response.status}`);
   const body = Buffer.from(await response.arrayBuffer());

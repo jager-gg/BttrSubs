@@ -95,6 +95,7 @@ async function rowsIn(request: StremioSubtitleRequest, code: string): Promise<Su
         subtitleId: 0,
         ref: `tb${row.id}`,
         source: "thesubtitledb",
+        ...(/^(ass|ssa)$/i.test(String(row.format ?? "")) ? { styled: true } : {}),
         movieId: 0,
         language,
         releaseInfo: row.release_name ? [row.release_name] : [],

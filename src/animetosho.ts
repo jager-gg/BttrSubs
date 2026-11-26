@@ -643,6 +643,7 @@ function tracksOf(rel: Release | undefined, request: StremioSubtitleRequest, map
       subtitleId: 0,
       ref: `at${track.place}`,
       source: "animetosho",
+      ...(/^(ass|ssa)$/i.test(track.format) ? { styled: true } : {}),
       movieId: 0,
       language: "english",
       releaseInfo: [...names, ...(titleFits ? [rel.title] : [])],

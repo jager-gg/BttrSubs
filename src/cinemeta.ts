@@ -26,8 +26,19 @@ export function runtimeOf(text: unknown): number | undefined {
 
 const DAY = 24 * 60 * 60;
 
-export async function metaOf(type: string, imdbId: string): Promise<TitleMeta | undefined> {
+export function metaOf(type: string, imdbId: string): Promise<TitleMeta | undefined> {
   const kind = type === "movie" ? "movie" : "series";
+  const under = askingMeta.get(`${kind}:${imdbId}`);
+  if (under) return under;
+  const work = lookUpMeta(kind, imdbId).finally(() => askingMeta.delete(`${kind}:${imdbId}`));
+  askingMeta.set(`${kind}:${imdbId}`, work);
+  return work;
+}
+
+/** Titles being asked about right now: one list asks about its title from several places at once, and it is asked once. */
+const askingMeta = new Map<string, Promise<TitleMeta | undefined>>();
+
+async function lookUpMeta(kind: "movie" | "series", imdbId: string): Promise<TitleMeta | undefined> {
   const key = cacheKey({ kind: "cinemeta-meta", type: kind, imdbId, with: "runtime" });
   const cached = await readJsonCache<TitleMeta | { none: true }>("results", key);
   if (cached) return "none" in cached ? undefined : cached;

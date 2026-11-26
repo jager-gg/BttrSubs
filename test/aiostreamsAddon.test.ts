@@ -92,3 +92,67 @@ describe("adding a configuration to its AIOStreams account", () => {
     expect(await error(settings)).toMatch(/^AIOStreams didn't answer\./);
   });
 });
+
+describe("the timeout this addon's entry needs", () => {
+  it("is the list's time, its grace and a second and a half over them", async () => {
+    const { config } = await import("../src/config.js");
+    const { entryTimeoutMs } = await import("../src/aiostreamsAddon.js");
+    const before = { budget: config.listBudgetMs, grace: config.fileWaitMs };
+    try {
+      config.listBudgetMs = 8000;
+      config.fileWaitMs = 1500;
+      expect(entryTimeoutMs()).toBe(11000);
+      config.fileWaitMs = 6000;
+      expect(entryTimeoutMs()).toBe(15500);
+    } finally {
+      config.listBudgetMs = before.budget;
+      config.fileWaitMs = before.grace;
+    }
+  });
+});
+
+describe("the grace a configuration's lists may use", () => {
+  it("is the one set only as far as its entry's timeout in AIOStreams allows, read in the background", async () => {
+    const { config } = await import("../src/config.js");
+    const { forgetEntryTimeouts, graceWithin, fileWaitFor } = await import("../src/aiostreamsAddon.js");
+    const before = { budget: config.listBudgetMs, grace: config.fileWaitMs, base: config.publicBaseUrl };
+    const url = settings.aiostreams!;
+    let reads = 0;
+    const answering = (timeout: number) =>
+      vi.stubGlobal("fetch", async () => {
+        reads++;
+        return json({ data: { userData: { presets: [other, entry(MINE, { timeout })] } } });
+      });
+    try {
+      config.publicBaseUrl = BASE;
+      config.listBudgetMs = 8000;
+      // At the default nothing is read.
+      config.fileWaitMs = 1500;
+      answering(15500);
+      expect(fileWaitFor(url, "secret")).toBe(1500);
+      expect(reads).toBe(0);
+      // Set longer: the default until the entry has been read, then what its timeout leaves room for.
+      config.fileWaitMs = 6000;
+      expect(fileWaitFor(url, "secret")).toBe(1500);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(reads).toBe(1);
+      expect(fileWaitFor(url, "secret")).toBe(6000);
+      expect(reads).toBe(1);
+      // An entry still at its old timeout keeps the default; one in between gets what fits.
+      expect(graceWithin(11000)).toBe(2000);
+      expect(graceWithin(10000)).toBe(1500);
+      expect(graceWithin(13000)).toBe(4000);
+      expect(graceWithin(undefined)).toBe(1500);
+      // No password saved: its entry can't be read.
+      forgetEntryTimeouts();
+      expect(fileWaitFor(url, undefined)).toBe(1500);
+      expect(reads).toBe(1);
+    } finally {
+      forgetEntryTimeouts();
+      config.listBudgetMs = before.budget;
+      config.fileWaitMs = before.grace;
+      config.publicBaseUrl = before.base;
+      vi.unstubAllGlobals();
+    }
+  });
+});

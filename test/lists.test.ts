@@ -128,13 +128,13 @@ async function fileWithTrack(filename: string, lines: Cue[], more: Record<string
   const windows = [];
   for (let from = 0; from < duration; from += 60000) windows.push({ from, to: from + 60000, cues: lines.filter((c) => c.start >= from && c.start < from + 60000) });
   await mkdir(path.join(process.cwd(), CACHE, "anchors"), { recursive: true });
-  await writeFile(path.join(process.cwd(), CACHE, "anchors", `${cacheKey({ kind: "file-anchors", filename })}.json`), JSON.stringify({ filename, duration, windows, track: 2, source: "index", rounds: 2, subtitleLangs: [], ...more }));
+  await writeFile(path.join(process.cwd(), CACHE, "anchors", `${cacheKey({ kind: "file-anchors", filename })}.json`), JSON.stringify({ filename, duration, windows, track: 2, source: "index", rounds: 2, subtitleLangs: [], pictureLangs: true, ...more }));
 }
 
 /** The playing file as one with no subtitle track and no audio to hear: nothing syncs to it. */
 async function fileWithoutTrack(filename: string) {
   await mkdir(path.join(process.cwd(), CACHE, "anchors"), { recursive: true });
-  await writeFile(path.join(process.cwd(), CACHE, "anchors", `${cacheKey({ kind: "file-anchors", filename })}.json`), JSON.stringify({ filename, duration: 1200000, windows: [], speechChecked: true, subtitleLangs: [] }));
+  await writeFile(path.join(process.cwd(), CACHE, "anchors", `${cacheKey({ kind: "file-anchors", filename })}.json`), JSON.stringify({ filename, duration: 1200000, windows: [], speechChecked: true, subtitleLangs: [], pictureLangs: true }));
 }
 
 const playing = (filename: string) => `/${new URLSearchParams({ filename })}`;
@@ -533,6 +533,85 @@ describe("a slow source", () => {
     expect(row.detail?.late).toContain("Anime Tosho");
   }, 15000);
 
+  it("stops waiting for Anime Tosho once another source has given the dub's captions", async () => {
+    const release = {
+      id: 7141,
+      title: "[Group] Show S2 - 02 [English Dub] [WEB 1080p]",
+      files: [{ filename: "[Group] Show S2 - 02 [English Dub] [WEB 1080p].mkv", info: { mediainfo: "" }, attachments: [{ type: "subtitle", url: "https://storage.animetosho.net/attachments/000f7/141.xz", info: { name: "English [CC]", language_code: "eng", format: "ASS" } }] }]
+    };
+    const slowFeed = (url: URL) => {
+      if (url.hostname !== "feed.animetosho.net") return undefined;
+      if (url.pathname === "/api") return new Response(`<rss><channel><item><title>${release.title}</title><guid>https://animetosho.net/view/7141</guid><torznab:attr name="files" value="1"/></item></channel></rss>`);
+      if (url.searchParams.get("show") === "torrent") return json(release);
+      return later(6000, () => json([]));
+    };
+    const kitsu = (url: URL, imdb: string) =>
+      url.hostname === "anime-kitsu.strem.fun" ? (url.pathname.includes("/catalog/") ? json({ metas: [] }) : json({ meta: { imdb_id: imdb, videos: [{ episode: 2, imdbSeason: 2, imdbEpisode: 2 }] } })) : undefined;
+    const settings: Settings = { subdl: "subdl_dub_in_key_0014", languages: ["English"], allowMachine: false, hearingImpaired: "include" };
+    // A source's English subtitle that says nothing of the dub ends no wait: the list goes to its budget.
+    sites((url) => {
+      if (url.hostname === "api.subdl.com") return json({ status: true, subtitles: [{ url: "/subtitle/9815-1.zip", language: "EN", release_name: "Show S02E02 1080p WEB", season: 2, episode: 2 }] });
+      return kitsu(url, "tt0000715") ?? slowFeed(url) ?? cinemeta(url);
+    });
+    const waited = await list(settings, "kitsu:7150:2");
+    expect(waited.ms).toBeGreaterThan(3900);
+    // One an uploader calls the dub's captions does: the list answers with it and what Anime Tosho has read.
+    sites((url) => {
+      if (url.hostname === "api.subdl.com") return json({ status: true, subtitles: [{ url: "/subtitle/9814-1.zip", language: "EN", release_name: "Show S02E02 English Dub 1080p WEB", season: 2, episode: 2 }] });
+      return kitsu(url, "tt0000714") ?? slowFeed(url) ?? cinemeta(url);
+    });
+    const answer = await list(settings, "kitsu:7140:2");
+    expect(answer.ms).toBeLessThan(2500);
+    expect(answer.subtitles.map(refOfTrack)).toContain("sd9814-1");
+    const row = stats.activityPage({ kind: "list", limit: 50 }).rows[0];
+    expect(row.detail?.late ?? []).not.toContain("Anime Tosho");
+    // A season's upload named as the dub's captions whose listed files lack the episode is none in hand:
+    // the pick leaves it out, so the list waits on for the release Anime Tosho is reading, and has its track.
+    const other = {
+      id: 7181,
+      title: "[Group] Show S2 - 02 [English Dub] [BD 1080p]",
+      files: [{ filename: "[Group] Show S2 - 02 [English Dub] [BD 1080p].mkv", info: { mediainfo: "" }, attachments: [{ type: "subtitle", url: "https://storage.animetosho.net/attachments/000f7/181.xz", info: { name: "English [CC]", language_code: "eng", format: "ASS" } }] }]
+    };
+    sites((url) => {
+      if (url.hostname === "api.subdl.com") {
+        return json({
+          status: true,
+          subtitles: [{ url: "/subtitle/9818-1.zip", language: "EN", release_name: "Show.S02.English.Dub.CC", season: 2, episode: 0, full_season: true, episode_from: 0, episode_end: 0, unpack_files: [{ name: "Show - S02E01.en.srt", season: 2, episode: 1 }] }]
+        });
+      }
+      if (url.hostname === "feed.animetosho.net") {
+        if (url.pathname === "/api") return new Response(`<rss><channel><item><title>${other.title}</title><guid>https://animetosho.net/view/7181</guid><torznab:attr name="files" value="1"/></item></channel></rss>`);
+        // The release takes a while to read; its name searches find nothing more.
+        return url.searchParams.get("show") === "torrent" ? later(1500, () => json(other)) : json([]);
+      }
+      return kitsu(url, "tt0004718") ?? cinemeta(url);
+    });
+    const lacking = await list(settings, "kitsu:74180:2");
+    expect(lacking.ms).toBeGreaterThan(1400);
+    expect(lacking.subtitles.map(refOfTrack)).toEqual(["at000f7181"]);
+  }, 30000);
+
+  it("goes on without Subtitle Cat once the indexed sources have each language, and waits for it where they have none", async () => {
+    const settings = (key: string): Settings => ({ subsource: key, subtitlecat: true, languages: ["Arabic"], allowMachine: false, hearingImpaired: "include" });
+    // Its site takes 2.5 s over its search; SubSource has the episode in Arabic at once.
+    const slowCat = (url: URL) => (url.hostname === "www.subtitlecat.com" ? later(2500, () => new Response("<html></html>")) : undefined);
+    sites((url) => slowCat(url) ?? subsource(url, { arabic: [sub(94151, "Show S01E05", { language: "arabic" })] }, {}, 4151) ?? cinemeta(url));
+    const answer = await list(settings("sk_cat_covered_key_051"), "tt0004751:1:5");
+    expect(answer.ms).toBeLessThan(1500);
+    expect(answer.subtitles.map(refOfTrack)).toEqual(["ss94151"]);
+    // A full list: nothing it was waiting for is missing.
+    expect(answer.cacheMaxAge).toBe(300);
+    const row = stats.activityPage({ kind: "list", limit: 50 }).rows[0];
+    expect(row.detail?.sources?.find((s) => s.name === "Subtitle Cat")?.state).toBe("late");
+    expect(row.detail?.late ?? []).not.toContain("Subtitle Cat");
+    // With no Arabic from SubSource, the list waits for what Subtitle Cat may have.
+    sites((url) => slowCat(url) ?? subsource(url, { arabic: [] }, {}, 4152) ?? cinemeta(url));
+    const waited = await list(settings("sk_cat_waited_key_0052"), "tt0004752:1:5");
+    expect(waited.ms).toBeGreaterThan(2400);
+    const second = stats.activityPage({ kind: "list", limit: 50 }).rows[0];
+    expect(second.detail?.sources?.find((s) => s.name === "Subtitle Cat")?.state).toBe("in time");
+  }, 20000);
+
   it("keeps a full list five minutes, as before", async () => {
     sites((url) => subsource(url, { arabic: [sub(9105, "Show S01E05", { language: "arabic" })] }, {}, 105) ?? openSubtitlesArabic(url, 9106));
     const answer = await list({ subsource: "sk_all_fast_key_0005", opensubtitles: true, languages: ["Arabic"], allowMachine: false, hearingImpaired: "include" }, "tt0000705:1:5");
@@ -591,6 +670,16 @@ describe("a next episode's list, asked while the one before it starts", () => {
       asked.push(`search ${url.searchParams.get("q")}`);
       return later(150, () => json([]));
     });
+
+  it("takes the episode after one only asked ahead for a play of its own", async () => {
+    const { askedAheadOf } = await import("../src/app.js");
+    const at = Date.now();
+    expect(askedAheadOf("jump", "tt0000885:1:10", "Jump.Show.S01E10.mkv", at)).toBeUndefined();
+    expect(askedAheadOf("jump", "tt0000885:1:11", "Jump.Show.S01E11.mkv", at + 2000)).toEqual({ id: "tt0000885:1:10", file: "Jump.Show.S01E10.mkv" });
+    // A jump to episode 12 a minute and a half later, and its own next episode asked beside it.
+    expect(askedAheadOf("jump", "tt0000885:1:12", "Jump.Show.S01E12.mkv", at + 90_000)).toBeUndefined();
+    expect(askedAheadOf("jump", "tt0000885:1:13", "Jump.Show.S01E13.mkv", at + 90_000)).toEqual({ id: "tt0000885:1:12", file: "Jump.Show.S01E12.mkv" });
+  });
 
   it("waits for that episode's Anime Tosho look-up before asking anything, and says it was asked ahead", async () => {
     const asked: string[] = [];
@@ -830,7 +919,8 @@ describe("a subtitle whose lines end far short of the file", () => {
     const [refused, standIn] = await Promise.all([download(token, "ss9831", query), download(token, "ss9832", query)]);
     const text = await refused.text();
     expect(text).toContain("no subtitle found for this track fits this file");
-    expect(text.match(/ --> /g)).toHaveLength(1);
+    // Nothing but that line, once a minute.
+    expect(text.match(/ --> /g)).toHaveLength(text.match(/no subtitle found for this track fits this file/g)!.length);
     expect(refused.headers.get("cache-control")).toBe("no-store");
     expect(resultOf("ss9831")?.result).toBe("another file's, not sent");
     expect((await stats.statsView("t")).days[0].total["downloads.short"]).toBe(shortBefore + 1);
@@ -880,7 +970,8 @@ describe("a subtitle whose lines end far short of the file", () => {
     const text = await res.text();
     // Neither the hour of lines nor the five minutes: the line saying nothing fits.
     expect(text).toContain("no subtitle found for this track fits this file");
-    expect(text.match(/ --> /g)).toHaveLength(1);
+    // Nothing but that line, once a minute.
+    expect(text.match(/ --> /g)).toHaveLength(text.match(/no subtitle found for this track fits this file/g)!.length);
     expect(res.headers.get("cache-control")).toBe("no-store");
   }, 30000);
 
@@ -930,6 +1021,43 @@ describe("a subtitle the sync judged another file's", () => {
     // Not timed, but not judged another's either: it goes as it came.
     const unsynced = await (await realFetch(`${base}/${token}/download/ss9812/subtitle.srt?${query}`)).text();
     expect(unsynced).toContain("A line of another episode.");
+  }, 20000);
+});
+
+describe("a subtitle whose source gives no answer", () => {
+  const text = (line: string) => `1\n00:00:05,000 --> 00:00:06,000\n${line}\n`;
+  /** SubSource never answers for `silent`, and sends `others` their text. */
+  const source = (silent: number[], others: Record<number, string>) =>
+    sites((url) => {
+      const id = Number(/^\/api\/v1\/subtitles\/(\d+)\/download$/.exec(url.pathname)?.[1] ?? /\/subtitles\/(\d+)\/download$/.exec(url.pathname)?.[1]);
+      if (url.hostname !== "api.subsource.net" || !id) return undefined;
+      if (silent.includes(id)) return new Promise<Response>(() => undefined);
+      return others[id] ? new Response(text(others[id])) : undefined;
+    });
+  const token = () => seal({ subsource: "sk_silent_source_key_41", languages: ["Arabic"], allowMachine: false, hearingImpaired: "include" });
+
+  it("is passed over for the next in line, well inside a player's patience", async () => {
+    source([9821], { 9822: "The next in line." });
+    const query = new URLSearchParams({ lang: "Arabic", season: "1", episode: "7", type: "series", alt: "ss9822@1:7" });
+    const began = Date.now();
+    const res = await realFetch(`${base}/${token()}/download/ss9821/subtitle.srt?${query}`);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("The next in line.");
+    expect(Date.now() - began).toBeLessThan(6000);
+  }, 15000);
+
+  it("says so in the track when nothing next in line can be had either, and isn't kept", async () => {
+    source([9823, 9824], {});
+    const query = new URLSearchParams({ lang: "Arabic", season: "1", episode: "7", type: "series", alt: "ss9824@1:7" });
+    const began = Date.now();
+    const res = await realFetch(`${base}/${token()}/download/ss9823/subtitle.srt?${query}`);
+    const body = await res.text();
+    expect(res.status).toBe(200);
+    expect(body).toContain("this subtitle's source didn't answer");
+    expect(body.match(/ --> /g)).toHaveLength(body.match(/this subtitle's source didn't answer/g)!.length);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(Date.now() - began).toBeLessThan(9500);
+    expect(stats.activityPage({ kind: "download", limit: 50 }).rows[0].result).toBe("its source didn't answer, not sent");
   }, 20000);
 });
 
@@ -1046,6 +1174,20 @@ describe("the playing file's audio language", () => {
     expect(answer.subtitles[0].lang).not.toMatch(/dub|cc/i);
   });
 
+  it("doesn't wait for Anime Tosho on a file with no English voices: no dub captions are listed for it", async () => {
+    sites((url) => {
+      // Its feed takes longer than the list has.
+      if (url.hostname === "feed.animetosho.net") return later(6000, () => new Response("<rss><channel></channel></rss>"));
+      return subsource(url, { english: [regular] }, {}, 4123) ?? cinemeta(url);
+    });
+    await fileWithTrack("Show.S01E05.Original.Only.mkv", dialogue(33), { audioLang: "jpn" });
+    const answer = await list({ subsource: "sk_no_voices_key_4123", aiostreams: AIO, languages: ["English"], allowMachine: false, hearingImpaired: "include" }, "tt0004723:1:5", playing("Show.S01E05.Original.Only.mkv"));
+    expect(answer.ms).toBeLessThan(3000);
+    expect(answer.subtitles.map(refOfTrack)).toEqual(["ss9223"]);
+    const row = stats.activityPage({ kind: "list", limit: 50 }).rows[0];
+    expect(row.detail?.late ?? []).not.toContain("Anime Tosho");
+  }, 15000);
+
   it("lists the dub captions on a file with English voices, as before", async () => {
     sites((url) => subsource(url, { english: [...dubs, regular] }, {}, 122) ?? cinemeta(url));
     await fileWithTrack("Show.S01E05.Dubbed.mkv", dialogue(37), { audioLang: "eng" });
@@ -1124,6 +1266,24 @@ describe("signs & songs and the file's own style", () => {
     // Regular English has no signs in its link, so its label doesn't say so.
     expect(labelOf(after, "ss9862")).not.toContain("Signs");
   }, 20000);
+
+  it("says \"Auto sync\" on a track whose own subtitle doesn't sync while one next in line is still untried", async () => {
+    const labelOf = (answer: Awaited<ReturnType<typeof list>>, ref: string) => answer.subtitles.find((t) => refOfTrack(t) === ref)?.label;
+    // Another episode's lines on top; the next in line can't be fetched for the list, so its sync isn't known.
+    sites((url) => subsource(url, { arabic: [sub(9871, "Show S01E05 1080p WEB", { downloads: 100, language: "arabic" }), sub(9872, "Show S01E05 720p WEB", { downloads: 50, language: "arabic" })] }, { "9871": srt(dialogue(972)) }, 171));
+    await fileWithTrack("Show.S01E05.Untried.mkv", dialogue(71), { audioLang: "eng" });
+    const settings: Settings = { subsource: "sk_untried_label_key_71", aiostreams: AIO, languages: ["Arabic"], allowMachine: false, hearingImpaired: "include" };
+    const answer = await list(settings, "tt0000871:1:5", playing("Show.S01E05.Untried.mkv"));
+    expect(altsOf(answer.subtitles[0])).toContain("ss9872");
+    expect(labelOf(answer, "ss9871")).toBe("Auto sync · BttrSubs");
+    // With nothing next in line, it is known not to sync: no status.
+    sites((url) => subsource(url, { arabic: [sub(9873, "Show S01E05 1080p WEB", { downloads: 100, language: "arabic" })] }, { "9873": srt(dialogue(973)) }, 172));
+    await fileWithTrack("Show.S01E05.Alone.mkv", dialogue(72), { audioLang: "eng" });
+    const alone = await list({ ...settings, subsource: "sk_untried_label_key_72" }, "tt0000872:1:5", playing("Show.S01E05.Alone.mkv"));
+    expect(labelOf(alone, "ss9873")).toBe("BttrSubs");
+    // The next in line's tries end here, not in the tests that follow.
+    await (await import("../src/sync.js")).settled();
+  }, 30000);
 
   it("leaves both out of a link that hasn't turned them on", async () => {
     const dub = sub(9854, "Show S01E05 [Eng Dubbed Version]", { downloads: 100 });
@@ -1380,6 +1540,9 @@ describe("a file whose link serves another listed release, the one under its nam
     const settings = { subsource: "sk_stand_in_key_0021", aiostreams: AIO, languages: ["Arabic"], allowMachine: false, hearingImpaired: "include" as const };
     const answer = await list(settings, "tt0000721:1:5", `/filename=${encodeURIComponent(FAILED)}&videoSize=${listedSize}`);
     expect(answer.subtitles.map(refOfTrack)).toEqual(["ss9321"]);
+    // Found out while the list was being made, the served release is the file from there on: the
+    // track is timed to it and says so on this first list.
+    expect(answer.subtitles[0].label).toBe("Synced · BttrSubs");
     // The list's own sync opens the link and finds what it serves.
     await settled();
     for (let waited = 0; waited < 5000 && (await sameFileRef(played)) === played; waited += 50) await later(50, () => undefined);
@@ -2425,6 +2588,28 @@ describe("the syncs' head start, on a list one slow source holds to its time", (
     // The list itself is no later for it.
     expect(answer.ms).toBeLessThan(5600);
     expect(stats.countedToday("lists.headStart")).toBe(before + 1);
+  }, 15000);
+
+  it("starts as soon as only a source that gives what it finds as it goes is still out, so the list needn't wait past its time for the syncs", async () => {
+    const lines = dialogue(11);
+    const before = stats.countedToday("lists.headStart");
+    sites((url) => {
+      if (url.hostname === "anime-kitsu.strem.fun") return url.pathname.includes("/catalog/") ? json({ metas: [] }) : json({ meta: { imdb_id: "tt0005794", videos: [{ episode: 5, imdbSeason: 1, imdbEpisode: 5 }] } });
+      // The anime source never answers its first search: the list waits its whole time for it, with nothing of its being read.
+      if (url.hostname === "feed.animetosho.net") return never();
+      if (url.hostname === "v3-cinemeta.strem.io") return json({ meta: { country: "Japan", genres: ["Animation"], name: "Soon Show" } });
+      if (url.hostname === "opensubtitles.stremio.homes") return json({ subtitles: [] });
+      // The subtitle's own download takes 3.3 s: started 2 s before the list's time ends, it would come in 1.3 s past it.
+      if (url.hostname === "api.subsource.net" && /\/subtitles\/9673\/download$/.test(url.pathname)) return later(3300, () => new Response(srt(lines.map((c) => ({ start: c.start - 900, end: c.end - 900 })))));
+      return subsource(url, { arabic: [sub(9673, "Soon Show S01E05", { language: "arabic" })] }, {}, 573);
+    });
+    await fileWithTrack("Soon.Show.S01E05.SoonStart.mkv", lines);
+    const answer = await list({ subsource: "sk_head_start_key_014", opensubtitles: true, aiostreams: AIO, languages: ["English", "Arabic"], allowMachine: false, hearingImpaired: "include" }, "kitsu:7140:5", playing("Soon.Show.S01E05.SoonStart.mkv"));
+    expect(answer.subtitles.map(refOfTrack)).toContain("ss9673");
+    expect(answer.subtitles.find((s) => refOfTrack(s) === "ss9673")!.label).toBe("Synced · BttrSubs");
+    expect(stats.countedToday("lists.headStart")).toBe(before + 1);
+    // Synced by the list's time (4 s here): it goes out then, not at the end of its grace.
+    expect(answer.ms).toBeLessThan(4700);
   }, 15000);
 
   it("isn't taken when every source answers early: the list's own pick has the time", async () => {
